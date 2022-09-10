@@ -20,11 +20,20 @@ import math
 import sys
 import time
 import json
+import statistics #Ville
 # The earliest we can measure the start time.
 _TRAIN_START_TIME = time.time()
-
+AVERAGE_SAMPLES = [] #Ville
+AVERAGE_FLOPS = []
 import torch
 from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
+import torch.nn #Ville
+import torch.optim
+import torch.profiler
+import torch.utils.data
+import torchvision.datasets
+import torchvision.models
+import torchvision.transforms as T #Ville loppuu
 
 from megatron import get_args
 from megatron import get_timers
@@ -112,7 +121,6 @@ def pretrain(train_valid_test_dataset_provider,
 
     args = get_args()
     timers = get_timers()
-
     if args.deepspeed:
         args.deepspeed_configuration = json.load(
             open(args.deepspeed_config, 'r', encoding='utf-8'))
@@ -171,6 +179,14 @@ def pretrain(train_valid_test_dataset_provider,
                           model, optimizer, lr_scheduler,
                           train_data_iterator, valid_data_iterator)
     print_datetime('after training is done')
+    print('Average samples per second: {:.2f} |'.format(statistics.mean(AVERAGE_SAMPLES)))#Ville
+    print('Average tflops per second: {:.2f} |'.format(statistics.mean(AVERAGE_FLOPS)))
+    
+    #Ville
+    writer = get_tensorboard_writer()
+    if writer:
+        writer.add_text("{:.2f}".format(statistics.mean(AVERAGE_SAMPLES)),"Average samples per second")
+        writer.add_scalar("samples/Average Samples",statistics.mean(AVERAGE_SAMPLES))
 
     if args.do_valid:
         prefix = 'the end of training for val data'
@@ -636,6 +652,7 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
     args = get_args()
     timers = get_timers()
     writer = get_tensorboard_writer()
+    
 
     # Advanced, skipped, and Nan iterations.
     advanced_iters_key = 'advanced iterations'
@@ -831,7 +848,9 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
         vocab_size = args.padded_vocab_size
 
         samples_per_sec, tflops, approx_parameters_in_billions = throughput_calculator(model, args, elapsed_time, total_iterations)
-
+        AVERAGE_SAMPLES.append(samples_per_sec)  #Villen lisäys
+        AVERAGE_FLOPS.append(tflops)
+        
         # Compute throughput.
         samples_per_sec_per_replica = samples_per_sec / args.data_parallel_size
         tokens_per_sec = samples_per_sec * seq_len
@@ -906,6 +925,7 @@ def save_checkpoint_and_time(iteration, model, optimizer, lr_scheduler):
     timers.log(['save-checkpoint'])
 
 
+
 def train(forward_step_func, model, optimizer, lr_scheduler,
           train_data_iterator, valid_data_iterator):
     """Train the model function."""
@@ -924,6 +944,16 @@ def train(forward_step_func, model, optimizer, lr_scheduler,
 
     # Iterations.
     iteration = args.iteration
+    
+    """if iteration == 0:
+        prof = torch.profiler.profile(
+            schedule=torch.profiler.schedule(
+                wait=1, warmup=1, active=3, repeat=2), #VILLEEE
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                'logs/tb_logs'),
+            record_shapes=True,
+            with_stack=True)
+        prof.start()"""
 
     timers('interval-time').start()
     print_datetime('before the start of training step')
@@ -947,6 +977,7 @@ def train(forward_step_func, model, optimizer, lr_scheduler,
                        model,
                        optimizer,
                        lr_scheduler)
+        #prof.step()#Ville
         iteration += 1
         args.iteration = iteration
         new_samples = mpu.get_data_parallel_world_size() * \
@@ -1011,6 +1042,7 @@ def train(forward_step_func, model, optimizer, lr_scheduler,
                     save_checkpoint_and_time(iteration, model, optimizer,
                                              lr_scheduler)
                 print_datetime('exiting program after {} minutes'.format(train_time))
+                #prof.stop()
                 sys.exit()
 
         # Exiting based on iterations
@@ -1020,6 +1052,7 @@ def train(forward_step_func, model, optimizer, lr_scheduler,
                                          lr_scheduler)
             torch.distributed.barrier()
             print_datetime('exiting program at iteration {}'.format(iteration))
+            #prof.stop()
             sys.exit()
 
 
