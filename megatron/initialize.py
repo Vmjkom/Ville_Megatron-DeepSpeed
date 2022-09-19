@@ -185,36 +185,46 @@ def _initialize_distributed():
     """Initialize torch.distributed and mpu."""
     args = get_args()
     device_count = torch.cuda.device_count()
+    gpus_per_node = int(os.environ["SLURM_GPUS_ON_NODE"])
+    args.rank     = int(os.environ["SLURM_PROCID"])
+    args.local_rank = args.rank - gpus_per_node * (args.rank // gpus_per_node)
     if torch.distributed.is_initialized():
 
         if args.rank == 0:
             print('torch distributed is already initialized, '
                   'skipping initialization ...', flush=True)
-        args.rank = torch.distributed.get_rank()
-        args.world_size = torch.distributed.get_world_size()
-
+        #args.rank = int(os.environ['SLURM_PROCID'])
+        #args.world_size = int(os.environ['WORLD_SIZE'])
+        #args.local_rank = int(os.environ['LOCAL_RANK'])
     else:
         if args.rank == 0:
             print('> initializing torch distributed ...', flush=True)
+            
         # Manually set the device ids.
         if device_count > 0:
+            print("DEVICE COUNT", device_count)
             device = args.rank % device_count
+            print("DEVICE_ID",device, "VS LOCAL RANK" ,args.local_rank)
             if args.local_rank is not None:
                 assert args.local_rank == device, \
                     'expected local-rank to be the same as rank % device-count.'
             else:
                 args.local_rank = device
 
-        torch.cuda.set_device(device) 
+        torch.cuda.set_device(args.local_rank) 
 
         # Call the init process
-        init_method = 'tcp://'
-        master_ip = os.getenv('MASTER_ADDR', 'localhost')
+        init_method = 'env://'
+        master_ip = os.environ['MASTER_ADDR']
         master_port = os.getenv('MASTER_PORT', '6000')
         init_method += master_ip + ':' + master_port
 
         if args.deepspeed or args.ds_inference:
-            deepspeed.init_distributed()
+            deepspeed.init_distributed(
+                dist_backend="nccl",
+                auto_mpi_discovery=False,
+                init_method=init_method
+            )
         else:
             torch.distributed.init_process_group(
                 backend=args.distributed_backend,

@@ -15,56 +15,45 @@
 
 """Pretrain utilities."""
 
-from datetime import datetime
+import json
 import math
+import statistics  # Ville
 import sys
 import time
-import json
-import statistics #Ville
+from datetime import datetime
+
 # The earliest we can measure the start time.
 _TRAIN_START_TIME = time.time()
 AVERAGE_SAMPLES = [] #Ville
 AVERAGE_FLOPS = []
+import deepspeed
 import torch
-from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
-import torch.nn #Ville
+import torch.nn  # Ville
 import torch.optim
-import torch.profiler
-import torch.utils.data
-import torchvision.datasets
-import torchvision.models
-import torchvision.transforms as T #Ville loppuu
+from deepspeed.compression.compress import init_compression, redundancy_clean
+from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
+from torch.profiler import (ProfilerActivity, profile, record_function,
+                            tensorboard_trace_handler)
 
-from megatron import get_args
-from megatron import get_timers
-from megatron import get_tensorboard_writer
-from megatron import get_current_global_batch_size
-from megatron import get_num_microbatches
-from megatron import is_last_rank
-from megatron import update_num_microbatches
-from megatron import mpu
-from megatron import print_rank_0
-from megatron import print_rank_last
-from megatron.checkpointing import load_checkpoint
-from megatron.checkpointing import save_checkpoint
-from megatron.model import Float16Module
-from megatron.optimizer import get_megatron_optimizer
-from megatron.initialize import initialize_megatron
-from megatron.initialize import write_args_to_tensorboard
+from megatron import (get_args, get_current_global_batch_size,
+                      get_num_microbatches, get_tensorboard_writer, get_timers,
+                      is_last_rank, is_rank_0, mpu, print_rank_0, print_rank_last,
+                      update_num_microbatches)
+from megatron.checkpointing import load_checkpoint, save_checkpoint
+from megatron.data.data_samplers import build_pretraining_data_loader
+from megatron.initialize import initialize_megatron, write_args_to_tensorboard
 from megatron.learning_rates import AnnealingLR
 from megatron.model import DistributedDataParallel as LocalDDP
-from megatron.utils import check_adlr_autoresume_termination
-from megatron.utils import unwrap_model
-from megatron.data.data_samplers import build_pretraining_data_loader
-from megatron.utils import calc_params_l2_norm
-from megatron.schedules import forward_backward_no_pipelining
-from megatron.schedules import forward_backward_pipelining_without_interleaving
-from megatron.schedules import forward_backward_pipelining_with_interleaving
-from megatron.utils import report_memory, throughput_calculator, checkpoint_throughput_calculator
-
-import deepspeed
-from deepspeed.compression.compress import init_compression, redundancy_clean
-
+from megatron.model import Float16Module
+from megatron.optimizer import get_megatron_optimizer
+from megatron.schedules import (
+    forward_backward_no_pipelining,
+    forward_backward_pipelining_with_interleaving,
+    forward_backward_pipelining_without_interleaving)
+from megatron.utils import (calc_params_l2_norm,
+                            check_adlr_autoresume_termination,
+                            checkpoint_throughput_calculator, report_memory,
+                            throughput_calculator, unwrap_model)
 
 
 def print_datetime(string):
@@ -129,8 +118,8 @@ def pretrain(train_valid_test_dataset_provider,
             args.curriculum_learning = args.deepspeed_configuration[ \
                 "curriculum_learning"]["enabled"]
         if args.curriculum_learning and not args.no_pipeline_parallel:
-            from deepspeed.runtime.data_pipeline.curriculum_scheduler \
-                import CurriculumScheduler
+            from deepspeed.runtime.data_pipeline.curriculum_scheduler import \
+                CurriculumScheduler
             args.curriculum_scheduler = CurriculumScheduler( \
                 args.deepspeed_configuration["curriculum_learning"])
         if "compression_training" in args.deepspeed_configuration:
@@ -174,19 +163,21 @@ def pretrain(train_valid_test_dataset_provider,
     print_rank_0('training ...')
 
     iteration = 0
-    if args.do_train and args.train_iters > 0:
-        iteration = train(forward_step_func,
+
+    iteration = train(forward_step_func,
                           model, optimizer, lr_scheduler,
                           train_data_iterator, valid_data_iterator)
+    
     print_datetime('after training is done')
-    print('Average samples per second: {:.2f} |'.format(statistics.mean(AVERAGE_SAMPLES)))#Ville
-    print('Average tflops per second: {:.2f} |'.format(statistics.mean(AVERAGE_FLOPS)))
+    print_rank_0('Average samples per second: {:.2f} |'.format(statistics.mean(AVERAGE_SAMPLES)))#Ville
+    print_rank_0('Average tflops per second: {:.2f} |'.format(statistics.mean(AVERAGE_FLOPS)))
     
     #Ville
     writer = get_tensorboard_writer()
     if writer:
         writer.add_text("{:.2f}".format(statistics.mean(AVERAGE_SAMPLES)),"Average samples per second")
         writer.add_scalar("samples/Average Samples",statistics.mean(AVERAGE_SAMPLES))
+        writer.add_scalar("flops/Average Flops",statistics.mean(AVERAGE_FLOPS))
 
     if args.do_valid:
         prefix = 'the end of training for val data'
@@ -531,7 +522,6 @@ def train_step(forward_step_func, data_iterator,
     """Single training step."""
     args = get_args()
     timers = get_timers()
-
     if args.deepspeed and args.ds_pipeline_enabled:
         skipped_iter = 0
         num_zeros_in_grad = 0
@@ -721,6 +711,7 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
         writer.add_scalar('steps-vs-samples/y=samples,x=steps', args.consumed_train_samples, iteration)
         writer.add_scalar('steps-vs-tokens/y=steps,x=tokens', iteration, args.consumed_train_tokens)
         writer.add_scalar('steps-vs-tokens/y=tokens,x=steps', args.consumed_train_tokens, iteration)
+        
         if args.log_learning_rate_to_tensorboard:
             writer.add_scalar('learning-rate/learning-rate', learning_rate, iteration)
             writer.add_scalar('learning-rate/learning-rate vs samples', learning_rate,
@@ -788,7 +779,7 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
                     opt_stats_2[1] = max(opt_stats_2[1], optimizer.state[param]['exp_avg_sq'].sqrt().abs_().max().item())
                     opt_stats_2[2] = max(opt_stats_2[2], abs(optimizer.state[param]['exp_avg'].max().item()), abs(optimizer.state[param]['exp_avg'].min().item()))
                     opt_stats_2[3] = max(opt_stats_2[3], abs(param.max().item()), abs(param.min().item()))
-            # print('step {} rank {} before sync opt_stats {}, {}'.format(iteration, torch.distributed.get_rank(), opt_stats_2, opt_stats))
+            print('step {} rank {} before sync opt_stats {}, {}'.format(iteration, torch.distributed.get_rank(), opt_stats_2, opt_stats))
             if args.zero_stage > 0:
                 # ZeRO partiions optimizer states
                 opt_stats = torch.cuda.FloatTensor(opt_stats)
@@ -811,7 +802,7 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
                 torch.distributed.all_reduce(opt_stats_2, op=torch.distributed.ReduceOp.MAX,
                     group=mpu.get_pipeline_model_parallel_group())
 
-            # print('step {} rank {} after sync opt_stats {}, {}'.format(iteration, torch.distributed.get_rank(), opt_stats_2, opt_stats))
+            print('step {} rank {} after sync opt_stats {}, {}'.format(iteration, torch.distributed.get_rank(), opt_stats_2, opt_stats))
             if writer and is_last_rank():
                 writer.add_scalar('optimizer/variance_l2 vs tokens', opt_stats[0]**0.5, args.consumed_train_tokens)
                 writer.add_scalar('optimizer/variance_sqrt_l2 vs tokens', opt_stats[1]**0.5, args.consumed_train_tokens)
@@ -865,6 +856,7 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
                                   elapsed_time_per_iteration, args.consumed_train_samples)
                 writer.add_scalar('iteration-time/iteration-time vs tokens',
                                   elapsed_time_per_iteration, args.consumed_train_tokens)
+                writer.add_scalar('flops/y=flops,x=steps',iteration,tflops)
         log_string = ' iteration {:8d}/{:8d} |'.format(
             iteration, args.train_iters)
         log_string += ' consumed samples: {:12d} |'.format(
@@ -941,119 +933,121 @@ def train(forward_step_func, model, optimizer, lr_scheduler,
 
     # Tracking loss.
     total_loss_dict = {}
-
     # Iterations.
     iteration = args.iteration
     
-    """if iteration == 0:
-        prof = torch.profiler.profile(
-            schedule=torch.profiler.schedule(
-                wait=1, warmup=1, active=3, repeat=2), #VILLEEE
-            on_trace_ready=torch.profiler.tensorboard_trace_handler(
-                'logs/tb_logs'),
-            record_shapes=True,
-            with_stack=True)
-        prof.start()"""
 
     timers('interval-time').start()
     print_datetime('before the start of training step')
     report_memory_flag = True
-    while iteration < args.train_iters and (args.train_tokens is None or \
-        args.consumed_train_tokens < args.train_tokens):
-        update_num_microbatches(args.consumed_train_samples)
-        if args.deepspeed:
-            # inform deepspeed of any batch size changes
-            global_batch_size = mpu.get_data_parallel_world_size() * \
-                                args.micro_batch_size * \
-                                get_num_microbatches()
-            model[0].set_train_batch_size(global_batch_size)
+    with torch.profiler.profile(
+        schedule=torch.profiler.schedule(
+        wait=10, # during this phase profiler is not active
+        warmup=5, # during this phase profiler starts tracing, but the results are discarded
+        active=5, # during this phase profiler traces and records data
+        repeat=2), # specifies an upper bound on the number of cycles)
+            on_trace_ready=tensorboard_trace_handler(f'logs/tb_logs/ngpus_{args.world_size}'),
+            with_stack=True,
+            with_flops=True # enable stack tracing, adds extra profiling overhead
+        ) as profiler:
+            while iteration < args.train_iters and (args.train_tokens is None or \
+                args.consumed_train_tokens < args.train_tokens):
+                update_num_microbatches(args.consumed_train_samples)
+                if args.deepspeed:
+                    # inform deepspeed of any batch size changes
+                    global_batch_size = mpu.get_data_parallel_world_size() * \
+                                        args.micro_batch_size * \
+                                        get_num_microbatches()
+                    model[0].set_train_batch_size(global_batch_size)
 
-        if args.curriculum_learning and not args.no_pipeline_parallel:
-            args.curriculum_seqlen = args.curriculum_scheduler.update_difficulty( \
-                    args.iteration + 1)
-        loss_dict, skipped_iter, grad_norm, num_zeros_in_grad = \
-            train_step(forward_step_func,
-                       train_data_iterator,
-                       model,
-                       optimizer,
-                       lr_scheduler)
-        #prof.step()#Ville
-        iteration += 1
-        args.iteration = iteration
-        new_samples = mpu.get_data_parallel_world_size() * \
-                                       args.micro_batch_size * \
-                                       get_num_microbatches()
-        args.consumed_train_samples += new_samples
-        if not args.custom_token_counting:
-            # Models like BERT have padding thus need special token counting.
-            # See example in ../../pretrain_bert.py.
-            if args.curriculum_learning:
-                args.consumed_train_tokens += new_samples * args.curriculum_seqlen
-            else:
-                args.consumed_train_tokens += new_samples * args.seq_length
+                if args.curriculum_learning and not args.no_pipeline_parallel:
+                    args.curriculum_seqlen = args.curriculum_scheduler.update_difficulty( \
+                            args.iteration + 1)
+                
+                loss_dict, skipped_iter, grad_norm, num_zeros_in_grad = \
+                    train_step(forward_step_func,
+                                train_data_iterator,
+                                model,
+                                optimizer,
+                                lr_scheduler)
+                #torch.distributed.barrier()
+                profiler.step()
+                iteration += 1
+                args.iteration = iteration
+                new_samples = mpu.get_data_parallel_world_size() * \
+                                            args.micro_batch_size * \
+                                            get_num_microbatches()
+                args.consumed_train_samples += new_samples
+                if not args.custom_token_counting:
+                    # Models like BERT have padding thus need special token counting.
+                    # See example in ../../pretrain_bert.py.
+                    if args.curriculum_learning:
+                        args.consumed_train_tokens += new_samples * args.curriculum_seqlen
+                    else:
+                        args.consumed_train_tokens += new_samples * args.seq_length
 
-        # Logging.
-        if args.deepspeed:
-            loss_scale = model[0].optimizer.cur_scale
-        else:
-            loss_scale = optimizer.get_loss_scale().item()
-        params_norm = None
-        if args.log_params_norm:
-            params_norm = calc_params_l2_norm(model)
-        report_memory_flag = training_log(loss_dict, total_loss_dict,
-                                          optimizer.param_groups[0]['lr'],
-                                          iteration, loss_scale,
-                                          report_memory_flag, skipped_iter,
-                                          grad_norm, params_norm, num_zeros_in_grad,
-                                          model, optimizer)
+                # Logging.
+                if args.deepspeed:
+                    loss_scale = model[0].optimizer.cur_scale
+                else:
+                    loss_scale = optimizer.get_loss_scale().item()
+                params_norm = None
+                if args.log_params_norm:
+                    params_norm = calc_params_l2_norm(model)
+                report_memory_flag = training_log(loss_dict, total_loss_dict,
+                                                optimizer.param_groups[0]['lr'],
+                                                iteration, loss_scale,
+                                                report_memory_flag, skipped_iter,
+                                                grad_norm, params_norm, num_zeros_in_grad,
+                                                model, optimizer)
 
-        # Autoresume
-        if args.adlr_autoresume and \
-           (iteration % args.adlr_autoresume_interval == 0):
-            check_adlr_autoresume_termination(iteration, model, optimizer,
-                                              lr_scheduler)
+                # Autoresume
+                if args.adlr_autoresume and \
+                (iteration % args.adlr_autoresume_interval == 0):
+                    check_adlr_autoresume_termination(iteration, model, optimizer,
+                                                    lr_scheduler)
 
-        # Evaluation
-        if args.eval_interval and iteration % args.eval_interval == 0 and \
-           args.do_valid:
-            prefix = 'iteration {}'.format(iteration)
-            evaluate_and_print_results(prefix, forward_step_func,
-                                       valid_data_iterator, model,
-                                       iteration, False)
+                # Evaluation
+                if args.eval_interval and iteration % args.eval_interval == 0 and \
+                args.do_valid:
+                    prefix = 'iteration {}'.format(iteration)
+                    evaluate_and_print_results(prefix, forward_step_func,
+                                            valid_data_iterator, model,
+                                            iteration, False)
 
-        # Checkpointing
-        saved_checkpoint = False
-        if args.save and args.save_interval and \
-           iteration % args.save_interval == 0:
-            save_checkpoint_and_time(iteration, model, optimizer,
-                                     lr_scheduler)
-            saved_checkpoint = True
-
-        # Exiting based on duration
-        if args.exit_duration_in_mins:
-            train_time = (time.time() - _TRAIN_START_TIME) / 60.0
-            done_cuda = torch.cuda.IntTensor(
-                [train_time > args.exit_duration_in_mins])
-            torch.distributed.all_reduce(
-                done_cuda, op=torch.distributed.ReduceOp.MAX)
-            done = done_cuda.item()
-            if done:
-                if not saved_checkpoint:
+                # Checkpointing
+                saved_checkpoint = False
+                if args.save and args.save_interval and \
+                iteration % args.save_interval == 0:
                     save_checkpoint_and_time(iteration, model, optimizer,
-                                             lr_scheduler)
-                print_datetime('exiting program after {} minutes'.format(train_time))
-                #prof.stop()
-                sys.exit()
+                                            lr_scheduler)
+                    saved_checkpoint = True
 
-        # Exiting based on iterations
-        if args.exit_interval and iteration % args.exit_interval == 0:
-            if not saved_checkpoint:
-                save_checkpoint_and_time(iteration, model, optimizer,
-                                         lr_scheduler)
-            torch.distributed.barrier()
-            print_datetime('exiting program at iteration {}'.format(iteration))
-            #prof.stop()
-            sys.exit()
+                # Exiting based on duration
+                if args.exit_duration_in_mins:
+                    train_time = (time.time() - _TRAIN_START_TIME) / 60.0
+                    done_cuda = torch.cuda.IntTensor(
+                        [train_time > args.exit_duration_in_mins])
+                    torch.distributed.all_reduce(
+                        done_cuda, op=torch.distributed.ReduceOp.MAX)
+                    done = done_cuda.item()
+                    if done:
+                        if not saved_checkpoint:
+                            save_checkpoint_and_time(iteration, model, optimizer,
+                                                    lr_scheduler)
+                        print_datetime('exiting program after {} minutes'.format(train_time))
+                        
+                        sys.exit()
+
+                # Exiting based on iterations
+                if args.exit_interval and iteration % args.exit_interval == 0:
+                    if not saved_checkpoint:
+                        save_checkpoint_and_time(iteration, model, optimizer,
+                                                lr_scheduler)
+                    torch.distributed.barrier()
+                    print_datetime('exiting program at iteration {}'.format(iteration))
+                    
+                    sys.exit()
 
 
     return iteration
