@@ -184,6 +184,8 @@ def setup_deepspeed_random_and_activation_checkpointing(args):
 def _initialize_distributed():
     """Initialize torch.distributed and mpu."""
     args = get_args()
+    device = torch.cuda.current_device()
+    print(device)
     device_count = torch.cuda.device_count()
 
     if torch.distributed.is_initialized():
@@ -197,17 +199,17 @@ def _initialize_distributed():
             print('> initializing torch distributed ...', flush=True)
             
         # Manually set the device ids.
-        if device_count > 0:
-            print("DEVICE COUNT", device_count)
-            device = args.rank % device_count
+        """if device_count > 0:
+            #print("DEVICE COUNT", device_count)
+            device = rank % device_count
             print("DEVICE_ID",device, "VS LOCAL RANK" ,args.local_rank)
             if args.local_rank is not None:
                 assert args.local_rank == device, \
                     'expected local-rank to be the same as rank % device-count.'
             else:
-                args.local_rank = device
+                args.local_rank = device"""
 
-        torch.cuda.set_device(args.local_rank)
+        #torch.cuda.set_device(args.local_rank)
 
         #Call the init process
         init_method = 'env://'
@@ -218,7 +220,7 @@ def _initialize_distributed():
         if args.deepspeed or args.ds_inference:
             deepspeed.init_distributed(
                 dist_backend="nccl",
-                auto_mpi_discovery=False,
+                auto_mpi_discovery=True,
                 init_method=init_method
             )
         else:

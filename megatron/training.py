@@ -946,9 +946,11 @@ def train(forward_step_func, model, optimizer, lr_scheduler,
         warmup=5, # during this phase profiler starts tracing, but the results are discarded
         active=5, # during this phase profiler traces and records data
         repeat=2), # specifies an upper bound on the number of cycles)
-            on_trace_ready=tensorboard_trace_handler(f'logs/tb_logs/ngpus_{args.world_size}'),
-            with_stack=True,
-            with_flops=True # enable stack tracing, adds extra profiling overhead
+            on_trace_ready=tensorboard_trace_handler(
+            f'logs/tb_logs/ngpus_{args.world_size}/profiler',
+            worker_name=f"{args.rank}_{args.local_rank}"),
+            with_stack=False, # enable stack tracing, adds extra profiling overhead
+            with_flops=True
         ) as profiler:
             while iteration < args.train_iters and (args.train_tokens is None or \
                 args.consumed_train_tokens < args.train_tokens):
@@ -970,7 +972,7 @@ def train(forward_step_func, model, optimizer, lr_scheduler,
                                 model,
                                 optimizer,
                                 lr_scheduler)
-                #torch.distributed.barrier()
+                
                 profiler.step()
                 iteration += 1
                 args.iteration = iteration
