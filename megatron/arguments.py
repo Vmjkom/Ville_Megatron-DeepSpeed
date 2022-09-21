@@ -69,8 +69,8 @@ def parse_args(extra_args_provider=None, defaults={},
     args.rank     = int(os.environ["SLURM_PROCID"])
     args.local_rank = int(os.environ["SLURM_LOCALID"])
     #args.rank - gpus_per_node * (args.rank // gpus_per_node)
-    print("LOCAL RANK",args.local_rank)
-    assert gpus_per_node == torch.cuda.device_count()
+    print("device_count",torch.cuda.device_count())
+    #assert gpus_per_node == torch.cuda.device_count()
     print(f"Hello from rank {args.rank} and local rank of {args.local_rank} of world_size{world_size} on host{os.environ['MASTER_ADDR']} where there are" \
         f" {gpus_per_node} allocated GPUs per node.", flush=True)
     # Tensor model parallel size.
@@ -676,6 +676,8 @@ def _add_distributed_args(parser):
                         help='local world size, usually 1, or the amount of gpus per node')
     group.add_argument('--world_size',type=int,default=None,
                         help='Usually the overall amount of GPUS')
+    group.add_argument('--rank',type=int,default=0,
+                        help='SLURM PROCID')
     group.add_argument('--lazy-mpu-init', type=bool, required=False,
                        help='If set to True, initialize_megatron() '
                        'skips DDP initialization and returns function to '
