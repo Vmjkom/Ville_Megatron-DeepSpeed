@@ -184,10 +184,21 @@ def setup_deepspeed_random_and_activation_checkpointing(args):
 def _initialize_distributed():
     """Initialize torch.distributed and mpu."""
     args = get_args()
-    device = torch.cuda.current_device()
-    print(device)
+    print("LOCAL ID FROM INITIALIZE ",os.environ['SLURM_LOCALID'])
+    print("local rank from init", args.local_rank,"rank from init", args.rank)
+    #print("VERSUS LOCAL ID FROM BERT_PRETRAIN ",args.local_rank)
+    print("CURRENT DEVICE FROM TORCH BEFORE INIT ",torch.cuda.current_device())
+    #device = torch.cuda.current_device()
     device_count = torch.cuda.device_count()
+    print("Args rank before setting it in init", args.rank)
+    args.rank = int(os.environ['SLURM_PROCID'])
 
+    args.local_rank = int(os.environ['SLURM_LOCALID'])
+    os.environ['RANK'] = str(args.rank)
+    os.environ['LOCAL_RANK'] = str(args.local_rank)
+    print("Torch device count before init",device_count)
+    print("SLURM JOB GPUS IN INIT", os.environ['SLURM_JOB_GPUS'])
+    print("OS ENVIRON CUDA DEVICE",os.environ['CUDA_VISIBLE_DEVICES'])
     if torch.distributed.is_initialized():
 
         if args.rank == 0:
@@ -196,40 +207,45 @@ def _initialize_distributed():
 
     else:
         if args.rank == 0:
-            print('> initializing torch distributed ...', flush=True)
+            print('> initializing torch distributed ...')
             
         # Manually set the device ids.
-        """if device_count > 0:
+        if device_count > 0:
             #print("DEVICE COUNT", device_count)
-            device = rank % device_count
+            device = args.rank % device_count
             print("DEVICE_ID",device, "VS LOCAL RANK" ,args.local_rank)
             if args.local_rank is not None:
                 assert args.local_rank == device, \
                     'expected local-rank to be the same as rank % device-count.'
             else:
-                args.local_rank = device"""
+                args.local_rank = device
 
-        #torch.cuda.set_device(args.local_rank)
+        torch.cuda.set_device(args.local_rank)
 
+        print("Current device",torch.cuda.current_device())
         #Call the init process
         init_method = 'env://'
         master_ip = os.environ['MASTER_ADDR']
         master_port = os.getenv('MASTER_PORT', '6000')
         init_method += master_ip + ':' + master_port
-
+        print("MASTER IP ",master_ip,"MASTER PORT ",master_port)
         if args.deepspeed or args.ds_inference:
+            print("Initializing distributed in deepspeed")
             deepspeed.init_distributed(
                 dist_backend="nccl",
-                auto_mpi_discovery=True,
+                distributed_port=master_port,#Default value of this is 29500 for some reason
+                auto_mpi_discovery=True,#Gets required values, like world_size, rank etc.. from enviroment variables
                 init_method=init_method
             )
         else:
+            print("Initializing distributed in pytorch")
             torch.distributed.init_process_group(
                 backend=args.distributed_backend,
                 world_size=args.world_size, rank=args.rank,
                 init_method=init_method)
     # Set the tensor model-parallel, pipeline model-parallel, and
     # data-parallel communicators.
+    print("Distribution init completed")
     if device_count > 0:
         if mpu.model_parallel_is_initialized():
             print('model parallel is already initialized')

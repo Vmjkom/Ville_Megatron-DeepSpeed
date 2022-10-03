@@ -20,6 +20,7 @@ import math
 import statistics  # Ville
 import sys
 import time
+import os
 from datetime import datetime
 
 # The earliest we can measure the start time.
@@ -324,6 +325,7 @@ def get_model(model_provider_func):
 
     if args.DDP_impl == 'torch':
         i = torch.cuda.current_device()
+        print("CURRENT DEVICE",i)
         model = [torchDDP(model_module, device_ids=[i], output_device=i,
                           process_group=mpu.get_data_parallel_group())
                  for model_module in model]
@@ -947,7 +949,7 @@ def train(forward_step_func, model, optimizer, lr_scheduler,
         active=5, # during this phase profiler traces and records data
         repeat=2), # specifies an upper bound on the number of cycles)
             on_trace_ready=tensorboard_trace_handler(
-            f'logs/tb_logs/ngpus_{args.world_size}/profiler',
+            f'logs/tb_logs/{str(os.environ["TYPE"])}/ngpus_{args.world_size}/profiler',
             worker_name=f"{args.rank}_{args.local_rank}"),
             with_stack=False, # enable stack tracing, adds extra profiling overhead
             with_flops=True

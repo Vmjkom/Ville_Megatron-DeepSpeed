@@ -64,12 +64,13 @@ def parse_args(extra_args_provider=None, defaults={},
 
     # Distributed args.
     
-
+    args.rank = int(os.environ['SLURM_PROCID'])
+    args.local_rank = int(os.environ['SLURM_LOCALID'])
     #args.rank - gpus_per_node * (args.rank // gpus_per_node)
     print("device_count",torch.cuda.device_count())
-    #assert gpus_per_node == torch.cuda.device_count()
-    print(f"Hello from rank {args.rank} and local rank of {args.local_rank} of world_size{args.world_size} on host{os.environ['MASTER_ADDR']} where there are" \
-        f" {int(os.environ['SLURM_GPUS_ON_NODE'])} allocated GPUs per node.", flush=True)
+    print(f"Hello from rank {args.rank} and local rank of {args.local_rank} of world_size{args.world_size} \
+        on host{os.environ['MASTER_ADDR']} where there are" \
+        f"{int(os.environ['SLURM_GPUS_ON_NODE'])} allocated GPUs per node.", flush=True)
     # Tensor model parallel size.
     args.tensor_model_parallel_size = min(
         args.tensor_model_parallel_size, args.world_size)
