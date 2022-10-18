@@ -13,28 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
+
 import torch
 
-from .package_info import (
-    __description__,
-    __contact_names__,
-    __url__,
-    __download_url__,
-    __keywords__,
-    __license__,
-    __package_name__,
-    __version__,
-)
+from .global_vars import (get_adlr_autoresume, get_args,
+                          get_current_global_batch_size, get_num_microbatches,
+                          get_tensorboard_writer, get_timers, get_tokenizer,
+                          update_num_microbatches)
+from .initialize import initialize_megatron
+from .package_info import (__contact_names__, __description__,
+                           __download_url__, __keywords__, __license__,
+                           __package_name__, __url__, __version__)
 
-from .global_vars import get_args
-from .global_vars import get_current_global_batch_size
-from .global_vars import get_num_microbatches
-from .global_vars import update_num_microbatches
-from .global_vars import get_tokenizer
-from .global_vars import get_tensorboard_writer
-from .global_vars import get_adlr_autoresume
-from .global_vars import get_timers
-from .initialize  import initialize_megatron
 
 def print_rank_0(message):
     """If distributed is initialized, print only on rank 0."""

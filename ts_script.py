@@ -13,7 +13,7 @@ with open('samples.txt') as f:
         else:
             flops[float(uusi[0])] = float(uusi[1])
 
-writer = SummaryWriter(log_dir='logs/tb_logs',filename_suffix='averages')
+writer = SummaryWriter(log_dir='logs/gpt2/tb_logs',filename_suffix='averages')
 
 
 samples_per_node = np.array(list(samples.keys()))

@@ -17,10 +17,10 @@
 
 import json
 import math
+import os
 import statistics  # Ville
 import sys
 import time
-import os
 from datetime import datetime
 
 # The earliest we can measure the start time.
@@ -38,8 +38,8 @@ from torch.profiler import (ProfilerActivity, profile, record_function,
 
 from megatron import (get_args, get_current_global_batch_size,
                       get_num_microbatches, get_tensorboard_writer, get_timers,
-                      is_last_rank, is_rank_0, mpu, print_rank_0, print_rank_last,
-                      update_num_microbatches)
+                      is_last_rank, is_rank_0, mpu, print_rank_0,
+                      print_rank_last, update_num_microbatches)
 from megatron.checkpointing import load_checkpoint, save_checkpoint
 from megatron.data.data_samplers import build_pretraining_data_loader
 from megatron.initialize import initialize_megatron, write_args_to_tensorboard
@@ -944,12 +944,12 @@ def train(forward_step_func, model, optimizer, lr_scheduler,
     report_memory_flag = True
     with torch.profiler.profile(
         schedule=torch.profiler.schedule(
-        wait=10, # during this phase profiler is not active
-        warmup=5, # during this phase profiler starts tracing, but the results are discarded
-        active=5, # during this phase profiler traces and records data
-        repeat=2), # specifies an upper bound on the number of cycles)
+        wait=4500, # during this phase profiler is not active
+        warmup=4600, # during this phase profiler starts tracing, but the results are discarded
+        active=4700, # during this phase profiler traces and records data
+        repeat=0), # specifies an upper bound on the number of cycles)
             on_trace_ready=tensorboard_trace_handler(
-            f'logs/tb_logs/{str(os.environ["TYPE"])}/ngpus_{args.world_size}/profiler',
+            f'{str(os.environ["TENSORBOARD_DIR"])}/profiler',
             worker_name=f"{args.rank}_{args.local_rank}"),
             with_stack=False, # enable stack tracing, adds extra profiling overhead
             with_flops=True

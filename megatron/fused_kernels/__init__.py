@@ -25,8 +25,8 @@ from torch.utils import cpp_extension
 # leading to recompilation of fused kernels. Set it to empty string
 # to avoid recompilation and assign arch flags explicity in
 # extra_cuda_cflags below
-os.environ["TORCH_CUDA_ARCH_LIST"] = ""
-
+os.environ["TORCH_CUDA_ARCH_LIST"] = "gfx90a"
+os.environ['PYTORCH_ROCM_ARCH']="gfx90a"
 
 def load(args):
 

@@ -15,24 +15,21 @@
 
 """Megatron initialization."""
 
-import random
 import os
+import random
 import time
 
+import deepspeed
+import deepspeed.utils.groups as groups
 import numpy as np
 import torch
 
-from megatron import fused_kernels
-from megatron import get_adlr_autoresume
-from megatron import get_args
-from megatron import get_tensorboard_writer
-from megatron import mpu
+from megatron import (fused_kernels, get_adlr_autoresume, get_args,
+                      get_tensorboard_writer, mpu)
 from megatron.global_vars import set_global_variables
 from megatron.mpu import (set_tensor_model_parallel_rank,
                           set_tensor_model_parallel_world_size)
 
-import deepspeed
-import deepspeed.utils.groups as groups
 
 def initialize_megatron(extra_args_provider=None, args_defaults={},
                         ignore_unknown_args=False, allow_no_cuda=False):
@@ -184,21 +181,11 @@ def setup_deepspeed_random_and_activation_checkpointing(args):
 def _initialize_distributed():
     """Initialize torch.distributed and mpu."""
     args = get_args()
-    print("LOCAL ID FROM INITIALIZE ",os.environ['SLURM_LOCALID'])
-    print("local rank from init", args.local_rank,"rank from init", args.rank)
-    #print("VERSUS LOCAL ID FROM BERT_PRETRAIN ",args.local_rank)
-    print("CURRENT DEVICE FROM TORCH BEFORE INIT ",torch.cuda.current_device())
-    #device = torch.cuda.current_device()
     device_count = torch.cuda.device_count()
-    print("Args rank before setting it in init", args.rank)
     args.rank = int(os.environ['SLURM_PROCID'])
-
     args.local_rank = int(os.environ['SLURM_LOCALID'])
-    os.environ['RANK'] = str(args.rank)
-    os.environ['LOCAL_RANK'] = str(args.local_rank)
-    print("Torch device count before init",device_count)
-    print("SLURM JOB GPUS IN INIT", os.environ['SLURM_JOB_GPUS'])
-    print("OS ENVIRON CUDA DEVICE",os.environ['CUDA_VISIBLE_DEVICES'])
+    os.environ['RANK'] = str(args.rank) #For deepspeed dist initialization
+    os.environ['LOCAL_RANK'] = str(args.local_rank) #For deepspeed dist initialization
     if torch.distributed.is_initialized():
 
         if args.rank == 0:
@@ -234,7 +221,7 @@ def _initialize_distributed():
             deepspeed.init_distributed(
                 dist_backend="nccl",
                 distributed_port=master_port,#Default value of this is 29500 for some reason
-                auto_mpi_discovery=True,#Gets required values, like world_size, rank etc.. from enviroment variables
+                auto_mpi_discovery=True,#Gets required values, like world_size, rank etc.. from enviroment variables which were set above
                 init_method=init_method
             )
         else:

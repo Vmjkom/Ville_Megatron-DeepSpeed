@@ -18,16 +18,12 @@
 import os
 import random
 import sys
-import numpy as np
 
+import numpy as np
 import torch
 
-from megatron import (get_args,
-                      is_rank_0,
-                      mpu,
-                      print_rank_0,
-                      update_num_microbatches,
-                      utils)
+from megatron import (get_args, is_rank_0, mpu, print_rank_0,
+                      update_num_microbatches, utils)
 
 _CHECKPOINT_VERSION = None
 
@@ -329,6 +325,7 @@ def load_checkpoint(model, optimizer, lr_scheduler, load_arg='load', strict=True
             state_dict = torch.load(checkpoint_name, map_location='cpu')
         except ModuleNotFoundError:
             from megatron.fp16_deprecated import loss_scaler
+
             # For backward compatibility.
             print_rank_0(' > deserializing using the old code structure ...')
             sys.modules['fp16.loss_scaler'] = sys.modules[
