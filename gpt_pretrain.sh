@@ -19,6 +19,7 @@ set -euo pipefail
 unset samples
 unset flops
 
+#mkdir -p logs
 rm -f logs/latest.out logs/latest.err
 ln -s gpt-$SLURM_JOB_NAME.out logs/latest.out
 ln -s gpt-$SLURM_JOB_NAME.err logs/latest.err
@@ -31,7 +32,9 @@ module load rocm
 module load craype-x86-trento
 module load craype-accel-amd-gfx90a
 
-source venv/bin/activate
+
+
+source /projappl/project_462000119/ville/Ville_Megatron-DeepSpeed/venv/bin/activate
 
 set | grep SLURM | while read line; do echo "# $line"; done
 
@@ -106,8 +109,8 @@ export MICRO_BATCH_SIZE_PER_GPU=8
 # MICRO_BATCH_SIZE_PER_GPU=4
 
 # Data
-VOCAB_FILE=dataset/gpt2-vocab.json
-MERGE_FILE=dataset/gpt2-merges.txt
+VOCAB_FILE=gpt2/gpt2-vocab.json
+MERGE_FILE=gpt2/gpt2-merges.txt
 DATA_PATH=data/gpt2/bookcorpus/BookCorpusDataset_text_document
 
 # Training
