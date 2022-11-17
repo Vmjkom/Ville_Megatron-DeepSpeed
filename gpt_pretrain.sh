@@ -1,17 +1,18 @@
 #!/bin/bash
-#SBATCH --job-name=meg_gpt_8gpu
+#SBATCH --job-name=gpt_pretrain_8gpu
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=100G
-#SBATCH --partition=pilot
-#SBATCH -t 02:00:00
+#SBATCH --partition=eap
+#SBATCH -t 12:00:00
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=8
 #SBATCH --ntasks-per-node=8
 #SBATCH --distribution=block:block
 #SBATCH --account=project_462000119
 #SBATCH --threads-per-core=2
-#SBATCH -o logs/gpt-%x.out
-#SBATCH -e logs/gpt-%x.err
+#SBATCH -o logs/gpt-%j.out
+#SBATCH -e logs/gpt-%j.err
+#SBATCH --exclude=nid005005
 
 
 set -euo pipefail
@@ -21,12 +22,11 @@ unset flops
 
 #mkdir -p logs
 rm -f logs/latest.out logs/latest.err
-ln -s gpt-$SLURM_JOB_NAME.out logs/latest.out
-ln -s gpt-$SLURM_JOB_NAME.err logs/latest.err
+ln -s gpt-$SLURM_JOB_ID.out logs/latest.out
+ln -s gpt-$SLURM_JOB_ID.err logs/latest.err
 
 module purge
-module load PrgEnv-gnu
-module load cray-python
+module load PrgEnv-amd
 module load cray-mpich
 module load rocm
 module load craype-x86-trento
@@ -34,19 +34,22 @@ module load craype-accel-amd-gfx90a
 
 
 
-source /projappl/project_462000119/ville/Ville_Megatron-DeepSpeed/venv/bin/activate
+source venv/bin/activate
 
 set | grep SLURM | while read line; do echo "# $line"; done
 
+#FAULTY SOCKETS
 export NCCL_SOCKET_IFNAME=hsn0,hsn1,hsn2,hsn3
+
 #TORCH-EXTENSIONS
-export USER=villekom
 export TORCH_EXTENSIONS_DIR=/tmp/$USER/torch_extensions/
+rm -rf $TORCH_EXTENSIONS_DIR
 CHECKPOINT_PATH=/scratch/project_462000119/ville/checkpoints
 rm -rf $CHECKPOINT_PATH
 
 #BINDING/OPTIMIZATION AFFINITY
 export MPICH_OFI_NIC_POLICY=GPU
+export MPICH_GPU_SUPPORT_ENABLED=1 
 
 #OMP_THREADS/CPU
 OMP_DISPLAY_AFFINITY=true
@@ -54,7 +57,6 @@ OMP_DISPLAY_AFFINITY=true
 #export OMP_PROC_BIND=close
 #export OMP_NUM_THREADS=2
 export SLURM_CPU_BIND=verbose
-#export SLURM_GPU_BIND=verbose
 
 #CUDA AND TORCH_DDP
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
@@ -69,9 +71,6 @@ export CUDA_DEVICE_ORDER=PCI_BUS_ID
 #WORLD_SIZE for deepspeed/torch distributed init
 export WORLD_SIZE=$((SLURM_GPUS_ON_NODE*SLURM_NNODES))
 
-
-#export RANK=$SLURM_PROCID
-#export LOCAL_RANK=$SLURM_LOCALID
 echo "ROCR_VISIBLE_DEVICES"=$ROCR_VISIBLE_DEVICES
 echo "WORLD_SIZE" $WORLD_SIZE
 echo "SLURM_NODEID" $SLURM_NODEID
@@ -100,7 +99,7 @@ export TENSORBOARD_DIR="logs/$TYPE/tb_logs/ngpus_$WORLD_SIZE"
 export NUM_LAYERS=24
 export HIDDEN_SIZE=1024
 export NUM_ATTENTION_HEADS=16
-export MICRO_BATCH_SIZE_PER_GPU=8
+export MICRO_BATCH_SIZE_PER_GPU=25
 
 # gpt2-large: 36 layers, hidden size 1280, 20 attention heads
 # NUM_LAYERS=36
@@ -114,8 +113,7 @@ MERGE_FILE=gpt2/gpt2-merges.txt
 DATA_PATH=data/gpt2/bookcorpus/BookCorpusDataset_text_document
 
 # Training
-TRAIN_ITERS=1000
-LEARNING_RATE=0.00015
+LEARNING_RATE=1.5e-4
 ZERO_STAGE=1
 GRADIENT_ACCUMULATION_STEPS=1
 TENSOR_PARALLEL=1
@@ -135,7 +133,7 @@ cat <<EOF > "$config_json"
     "fp16": {
         "enabled": true
     },
-    "steps_per_print": 50000,
+    "steps_per_print": 1,
     "wall_clock_breakdown": true,
     "flops_profiler": {
         "enabled": false
@@ -143,9 +141,9 @@ cat <<EOF > "$config_json"
      "activation_checkpointing": {
         "partition_activations": true,
         "cpu_checkpointing": false,
-        "contiguous_memory_optimization": true,
+        "contiguous_memory_optimization": false,
         "number_checkpoints": null,
-        "synchronize_checkpoint_boundary": false,
+        "synchronize_checkpoint_boundary": true,
         "profile": false
     },
     "tensorboard": {
@@ -154,7 +152,7 @@ cat <<EOF > "$config_json"
         "job_name": "ngpus_$WORLD_SIZE"
     },
     "elasticity": {
-    "enabled": true,
+    "enabled": false,
     "max_train_batch_size": $SEQ_LENGTH,
     "micro_batch_sizes": [2,4,8],
     "min_gpus": $WORLD_SIZE,
@@ -176,21 +174,20 @@ GPT_ARGS="--num-layers $NUM_LAYERS \
         --encoder-seq-length $SEQ_LENGTH \
         --vocab-file $VOCAB_FILE \
         --merge-file $MERGE_FILE \
-        --save $CHECKPOINT_PATH \
-        --load $CHECKPOINT_PATH \
         --micro-batch-size $MICRO_BATCH_SIZE_PER_GPU \
         --tensor-model-parallel-size $TENSOR_PARALLEL \
         --pipeline-model-parallel-size $PIPELINE_PARALLEL \
         --train-iters 5000 \
-        --lr $LEARNING_RATE \
         --lr-warmup-fraction 0.01 \
+        --lr $LEARNING_RATE \
+        --min-lr 1e-5 \
         --num-workers $SLURM_CPUS_PER_TASK \
         --tokenizer-type GPT2BPETokenizer \
         --data-path $DATA_PATH \
         --world_size $WORLD_SIZE \
         --fp16"
 
-OUTPUT_ARGS="--log-interval 10 \
+OUTPUT_ARGS="--log-interval 100 \
              --save-interval 500 \
              --eval-interval 100 \
              --eval-iters 10 \
@@ -204,6 +201,7 @@ DEEPSPEED_ARGS=" \
     --deepspeed_config ${config_json} \
     --zero-stage ${ZERO_STAGE} \
     --deepspeed-activation-checkpointing \
+    --synchronize-each-layer
     "
 
 export TORCH_LAUNCHER="python -u -m torch.distributed.launch \

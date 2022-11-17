@@ -175,11 +175,13 @@ def pretrain(train_valid_test_dataset_provider,
     
     #Ville
     writer = get_tensorboard_writer()
-    if writer:
+    """if writer:
         writer.add_text("{:.2f}".format(statistics.mean(AVERAGE_SAMPLES)),"Average samples per second")
         writer.add_scalar("samples/Average Samples",statistics.mean(AVERAGE_SAMPLES))
         writer.add_scalar("flops/Average Flops",statistics.mean(AVERAGE_FLOPS))
-
+        writer.add_hparams({"ngpus": args.world_size, "batch_size": get_current_global_batch_size(), "lr": args.lr},
+                            {"hparam/tflops": statistics.mean(AVERAGE_FLOPS)})"""
+                            
     if args.do_valid:
         prefix = 'the end of training for val data'
         evaluate_and_print_results(prefix, forward_step_func,
@@ -944,13 +946,14 @@ def train(forward_step_func, model, optimizer, lr_scheduler,
     report_memory_flag = True
     with torch.profiler.profile(
         schedule=torch.profiler.schedule(
-        wait=4500, # during this phase profiler is not active
-        warmup=4600, # during this phase profiler starts tracing, but the results are discarded
-        active=4700, # during this phase profiler traces and records data
-        repeat=0), # specifies an upper bound on the number of cycles)
+        wait=1000, # during this phase profiler is not active
+        warmup=10, # during this phase profiler starts tracing, but the results are discarded
+        active=2, # during this phase profiler traces and records data
+        repeat=1), # specifies an upper bound on the number of cycles)
             on_trace_ready=tensorboard_trace_handler(
             f'{str(os.environ["TENSORBOARD_DIR"])}/profiler',
             worker_name=f"{args.rank}_{args.local_rank}"),
+            profile_memory=False,
             with_stack=False, # enable stack tracing, adds extra profiling overhead
             with_flops=True
         ) as profiler:
@@ -976,6 +979,7 @@ def train(forward_step_func, model, optimizer, lr_scheduler,
                                 lr_scheduler)
                 
                 profiler.step()
+                
                 iteration += 1
                 args.iteration = iteration
                 new_samples = mpu.get_data_parallel_world_size() * \

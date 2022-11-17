@@ -25,8 +25,8 @@ from torch.utils import cpp_extension
 # leading to recompilation of fused kernels. Set it to empty string
 # to avoid recompilation and assign arch flags explicity in
 # extra_cuda_cflags below
-os.environ["TORCH_CUDA_ARCH_LIST"] = "gfx90a"
-os.environ['PYTORCH_ROCM_ARCH']="gfx90a"
+os.environ["TORCH_CUDA_ARCH_LIST"] = ""
+os.environ['PYTORCH_ROCM_ARCH']=""
 
 def load(args):
 
@@ -111,7 +111,7 @@ def load(args):
 
 
 def _get_cuda_bare_metal_version(cuda_dir):
-    raw_output = subprocess.check_output([cuda_dir + "/bin/nvcc", "-V"],
+    raw_output = subprocess.check_output([cuda_dir + "/bin/nvcc", "-V"],#HIPCC need here?
                                          universal_newlines=True)
     output = raw_output.split()
     release_idx = output.index("release") + 1

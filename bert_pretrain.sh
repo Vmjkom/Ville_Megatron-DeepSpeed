@@ -1,53 +1,63 @@
 #!/bin/bash
-#SBATCH --job-name=meg_gpt_8gpu
+#SBATCH --job-name=bert_8gpu
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=50G
-#SBATCH --partition gputest
-#SBATCH -t 00:15:00
-#SBATCH --nodes=2
-#SBATCH --gpus-per-node=v100:4
-##SBATCH --gpu-bind=single:1
-#SBATCH --ntasks-per-node=4
+#SBATCH --partition=pilot
+#SBATCH -t 2-00:00:00
+#SBATCH --nodes=1
+#SBATCH --gpus-per-node=8
+#SBATCH --ntasks-per-node=8
 #SBATCH --distribution=block:block
-#SBATCH --account=project_2004600
-#SBATCH -o logs/bert-%x.out
-#SBATCH -e logs/bert-%x.err
+#SBATCH --account=project_462000119
+#SBATCH --threads-per-core=2
+#SBATCH -o logs/bert-%j.out
+#SBATCH -e logs/bert-%j.err
 
-set -euxo pipefail
+set -euo pipefail
 
 unset samples
 unset flops
 
 rm -f logs/latest.out logs/latest.err
-ln -s bert-$SLURM_JOB_NAME.out logs/latest.out
-ln -s bert-$SLURM_JOB_NAME.err logs/latest.err
+ln -s bert-$SLURM_JOB_ID.out logs/latest.out
+ln -s bert-$SLURM_JOB_ID.err logs/latest.err
+
 
 module purge
+module load PrgEnv-amd
+module load cray-mpich
+module load rocm
+module load craype-x86-trento
+module load craype-accel-amd-gfx90a
+
+source venv/bin/activate
+
+set | grep SLURM | while read line; do echo "# $line"; done
+
+#FAULTY SOCKETS
+export NCCL_SOCKET_IFNAME=hsn0,hsn1,hsn2,hsn3
 
 
-module load pytorch/1.12
-#module load pgi/19.7
-#module load cuda
-#module load hpcx-mpi
+#BINDING/OPTIMIZATION AFFINITY
+export MPICH_OFI_NIC_POLICY=GPU
+export MPICH_GPU_SUPPORT_ENABLED=1 
 
 #OMP_THREADS/CPU
-#OMP_DISPLAY_AFFINITY=true
+OMP_DISPLAY_AFFINITY=true
 #export OMP_PLACES=cores
 #export OMP_PROC_BIND=close
-#export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
+#export OMP_NUM_THREADS=2
 export SLURM_CPU_BIND=verbose
 
 #CUDA
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 #export CUDA_LAUNCH_BLOCKING=1
-echo "CUDA DEVICES FROM SBATCH" $CUDA_VISIBLE_DEVICES
 
 #Uncomment for debugging
-export NCCL_DEBUG=INFO
-export TORCH_DISTRIBUTED_DEBUG=DETAIL
+#export NCCL_DEBUG=INFO
+#export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
 
-#TODO VAIHDA MASTER_ADDR hostname head -n 1 tms
 #Distributed args
 export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 export MASTER_PORT=$(expr 10000 + $(echo -n $SLURM_JOBID | tail -c 4))
@@ -60,67 +70,44 @@ export MASTER_PORT=$(expr 10000 + $(echo -n $SLURM_JOBID | tail -c 4))
 echo "START $SLURM_JOBID: $(date)"
 
 
-#set | grep MPI | while read line; do echo "# $line"; done
-#set | grep SLURM | while read line; do echo "# $line"; done
-
 export TYPE='bert'
-export USER=villekom
 export TORCH_EXTENSIONS_DIR=/tmp/$USER/torch_extensions/
+rm -rf $TORCH_EXTENSIONS_DIR
 #TP_SIZE=1
 #PP_SIZE=1
 
-export NNODES=$SLURM_NNODES
+
 export WORLD_SIZE=$((SLURM_GPUS_ON_NODE*SLURM_NNODES))
-
-#CUDA_VISIBLE_DEVICES=$SLURM_LOCALID
-#echo "SLURM GPUS STEP VS JOB" $SLURM_STEP_GPUS $SLURM_JOB_GPUS
-#echo "SLURM DEVICE ORDINAL " $GPU_DEVICE_ORDINAL
-#echo "SLURM GPUS OVERALL BERT" $SLURM_GPUS
-#CUDA_VISIBLE_DEVICES=$GPU_DEVICE_ORDINAL
-
-
-BATCH_SIZE_PER_GPU=15
-#export RANK=$SLURM_PROCID
-#export LOCAL_RANK=$SLURM_LOCALID
-#echo "CUDA_VISIBLE_DEVICES"=$CUDA_VISIBLE_DEVICES
-#echo "WORLD_SIZE" $WORLD_SIZE
-#echo "SLURM_NODEID" $SLURM_NODEID
-#echo "SLURM LOCALID" $SLURM_LOCALID
-#echo "SLURM PROCID" $SLURM_PROCID
-#echo "MPIX_RANK" $MPIX_RANK
-
-
-
-
+export BATCH_SIZE_PER_GPU=25
 export GLOBAL_BATCH_SIZE=$((WORLD_SIZE*BATCH_SIZE_PER_GPU))
 
-export TENSORBOARD_DIR="logs/$TYPE/tb_logs/ngpus_$WORLD_SIZE"
+export TENSORBOARD_DIR="logs/$TYPE/tb_logs/ngpus_$WORLD_SIZE/$SLURM_JOB_ID"
 rm -rf $TENSORBOARD_DIR
-#OMP_NUM_THREADS=2
 
 
-CHECKPOINT_PATH=checkpoints/bert_345m
+CHECKPOINT_PATH=checkpoints/bert_base
 rm -rf $CHECKPOINT_PATH
-VOCAB_FILE=nvidia/megatron-bert-cased-345m/vocab.txt
-DATA_PATH=data/bert/tiny-owt2-sample_text_sentence
+VOCAB_FILE=bert/finbert_vocab.txt
+DATA_PATH=data/bert/finbert_data/finbert_train
+
 BERT_ARGS="--num-layers 24 \
           --no-pipeline-parallel \
-          --pipeline-model-parallel-size 1 \
           --tensor-model-parallel-size 1 \
+          --pipeline-model-parallel-size 1 \
           --hidden-size 1024 \
           --num-attention-heads 16 \
           --seq-length 512 \
-          --split 949,50,1 \
+          --split 949,5,5 \
           --max-position-embeddings 512\
           --micro-batch-size $BATCH_SIZE_PER_GPU \
           --global-batch-size $GLOBAL_BATCH_SIZE \
-          --lr 0.0001 \
-          --train-iters 100 \
-          --lr-decay-iters 99 \
+          --lr 1e-4 \
+          --train-iters 1000000 \
+          --save $CHECKPOINT_PATH \
           --vocab-file $VOCAB_FILE \
           --tokenizer-type BertWordPieceCase \
           --data-impl mmap \
-          --num-workers $SLURM_CPUS_PER_TASK \
+          --num-workers 4 \
           --data-path $DATA_PATH \
           --DDP-impl torch \
           --lr-warmup-fraction .01 \
@@ -128,9 +115,9 @@ BERT_ARGS="--num-layers 24 \
           --world_size $WORLD_SIZE \
           "
 
-OUTPUT_ARGS="--log-interval 10 \
-             --save-interval 500 \
-             --eval-interval 100 \
+OUTPUT_ARGS="--log-interval 1 \
+             --save-interval 10000 \
+             --eval-interval 1000 \
              --eval-iters 10 \
              --tensorboard-dir $TENSORBOARD_DIR \
              --log-batch-size-to-tensorboard \
@@ -153,15 +140,23 @@ cat <<EOF > "$config_json"
     "fp16": {
         "enabled": true
     },
-    "steps_per_print": 50000,
+    "steps_per_print": 100,
     "wall_clock_breakdown": true,
     "flops_profiler": {
         "enabled": false
     },
+     "activation_checkpointing": {
+        "partition_activations": false,
+        "cpu_checkpointing": false,
+        "contiguous_memory_optimization": false,
+        "number_checkpoints": null,
+        "synchronize_checkpoint_boundary": false,
+        "profile": false
+    },
     "tensorboard": {
-        "enabled": false,
-        "output_path": "logs/tb_logs/ds_logs/",
-        "job_name": "$SLURM_GPUS_ON_NODE"
+        "enabled": true,
+        "output_path": "$TENSORBOARD_DIR",
+        "job_name": "ds_logs"
     }
 }
 
@@ -179,11 +174,11 @@ export LOGLEVEL=INFO
 
 export TORCH_LAUNCHER="python -m torch.distributed.run \
     --nproc_per_node $SLURM_GPUS_ON_NODE \
-    --nnodes $NNODES \
+    --nnodes $SLURM_NNODES \
     --rdzv_backend=c10d \
     "
 
-export DS_LAUNCHER="deepspeed --num_nodes $NNODES --num_gpus $WORLD_SIZE"
+export DS_LAUNCHER="deepspeed --num_nodes $SLURM_NNODES --num_gpus $WORLD_SIZE"
 
 export CMD=" \
     pretrain_bert.py \
@@ -192,7 +187,9 @@ export CMD=" \
     $DEEPSPEED_ARGS \
     "
 
-srun -l python3 $CMD
+MASKS="ff000000000000,ff00000000000000,ff0000,ff000000,ff,ff00,ff00000000,ff0000000000"
+
+srun -l --cpu-bind=mask_cpu:$MASKS python3 $CMD
 
 #Take out the last printed average samples_per second as it is logged times*amount of gpus(I think)
 samples=$(grep "Average samples per second" logs/latest.out | tail -n 1 | grep -o "[0-9]*\.[0-9].")
