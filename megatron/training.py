@@ -175,12 +175,12 @@ def pretrain(train_valid_test_dataset_provider,
     
     #Ville
     writer = get_tensorboard_writer()
-    """if writer:
+    if writer:
         writer.add_text("{:.2f}".format(statistics.mean(AVERAGE_SAMPLES)),"Average samples per second")
         writer.add_scalar("samples/Average Samples",statistics.mean(AVERAGE_SAMPLES))
         writer.add_scalar("flops/Average Flops",statistics.mean(AVERAGE_FLOPS))
         writer.add_hparams({"ngpus": args.world_size, "batch_size": get_current_global_batch_size(), "lr": args.lr},
-                            {"hparam/tflops": statistics.mean(AVERAGE_FLOPS)})"""
+                            {"hparam/tflops": statistics.mean(AVERAGE_FLOPS)})
                             
     if args.do_valid:
         prefix = 'the end of training for val data'
@@ -945,6 +945,7 @@ def train(forward_step_func, model, optimizer, lr_scheduler,
     print_datetime('before the start of training step')
     report_memory_flag = True
     with torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CPU],
         schedule=torch.profiler.schedule(
         wait=1000, # during this phase profiler is not active
         warmup=10, # during this phase profiler starts tracing, but the results are discarded
@@ -953,7 +954,7 @@ def train(forward_step_func, model, optimizer, lr_scheduler,
             on_trace_ready=tensorboard_trace_handler(
             f'{str(os.environ["TENSORBOARD_DIR"])}/profiler',
             worker_name=f"{args.rank}_{args.local_rank}"),
-            profile_memory=False,
+            profile_memory=True,
             with_stack=False, # enable stack tracing, adds extra profiling overhead
             with_flops=True
         ) as profiler:

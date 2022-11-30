@@ -2,8 +2,8 @@
 #SBATCH --job-name=gpt_pretrain_8gpu
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=100G
-#SBATCH --partition=eap
-#SBATCH -t 12:00:00
+#SBATCH --partition=pilot
+#SBATCH -t 00:30:00
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=8
 #SBATCH --ntasks-per-node=8
@@ -26,15 +26,15 @@ ln -s gpt-$SLURM_JOB_ID.out logs/latest.out
 ln -s gpt-$SLURM_JOB_ID.err logs/latest.err
 
 module purge
+module load cray-python
 module load PrgEnv-amd
 module load cray-mpich
-module load rocm
 module load craype-x86-trento
 module load craype-accel-amd-gfx90a
 
 
 
-source venv/bin/activate
+source /scratch/project_462000119/ville/Ville_Megatron-DeepSpeed/venv/bin/activate
 
 set | grep SLURM | while read line; do echo "# $line"; done
 
@@ -44,8 +44,8 @@ export NCCL_SOCKET_IFNAME=hsn0,hsn1,hsn2,hsn3
 #TORCH-EXTENSIONS
 export TORCH_EXTENSIONS_DIR=/tmp/$USER/torch_extensions/
 rm -rf $TORCH_EXTENSIONS_DIR
-CHECKPOINT_PATH=/scratch/project_462000119/ville/checkpoints
-rm -rf $CHECKPOINT_PATH
+
+#rm -rf $CHECKPOINT_PATH
 
 #BINDING/OPTIMIZATION AFFINITY
 export MPICH_OFI_NIC_POLICY=GPU
@@ -59,7 +59,7 @@ OMP_DISPLAY_AFFINITY=true
 export SLURM_CPU_BIND=verbose
 
 #CUDA AND TORCH_DDP
-export CUDA_DEVICE_ORDER=PCI_BUS_ID
+#export CUDA_DEVICE_ORDER=PCI_BUS_ID
 
 
 #DEBUG
@@ -70,13 +70,6 @@ export CUDA_DEVICE_ORDER=PCI_BUS_ID
 
 #WORLD_SIZE for deepspeed/torch distributed init
 export WORLD_SIZE=$((SLURM_GPUS_ON_NODE*SLURM_NNODES))
-
-echo "ROCR_VISIBLE_DEVICES"=$ROCR_VISIBLE_DEVICES
-echo "WORLD_SIZE" $WORLD_SIZE
-echo "SLURM_NODEID" $SLURM_NODEID
-echo "SLURM LOCALID" $SLURM_LOCALID
-echo "SLURM PROCID" $SLURM_PROCID
-echo "SLURM_JOB_GPUS" $SLURM_JOB_GPUS
 
 #NETWORK
 export MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
@@ -96,10 +89,11 @@ export TENSORBOARD_DIR="logs/$TYPE/tb_logs/ngpus_$WORLD_SIZE"
 # MICRO_BATCH_SIZE_PER_GPU=16
 
 # gpt2-medium: 24 layers, hidden size 1024, 16 attention heads
+model_size=355M
 export NUM_LAYERS=24
 export HIDDEN_SIZE=1024
 export NUM_ATTENTION_HEADS=16
-export MICRO_BATCH_SIZE_PER_GPU=25
+export MICRO_BATCH_SIZE_PER_GPU=15
 
 # gpt2-large: 36 layers, hidden size 1280, 20 attention heads
 # NUM_LAYERS=36
@@ -107,17 +101,23 @@ export MICRO_BATCH_SIZE_PER_GPU=25
 # NUM_ATTENTION_HEADS=20
 # MICRO_BATCH_SIZE_PER_GPU=4
 
+
+
 # Data
 VOCAB_FILE=gpt2/gpt2-vocab.json
 MERGE_FILE=gpt2/gpt2-merges.txt
 DATA_PATH=data/gpt2/bookcorpus/BookCorpusDataset_text_document
 
 # Training
-LEARNING_RATE=1.5e-4
+LEARNING_RATE=1e-4
 ZERO_STAGE=1
 GRADIENT_ACCUMULATION_STEPS=1
 TENSOR_PARALLEL=1
 PIPELINE_PARALLEL=1
+
+
+CHECKPOINT_PATH=checkpoints/$TYPE/$model_size
+
 
 mkdir -p ds_configs
 config_json="ds_configs/./ds_config.$SLURM_JOBID.json"
@@ -133,13 +133,13 @@ cat <<EOF > "$config_json"
     "fp16": {
         "enabled": true
     },
-    "steps_per_print": 1,
+    "steps_per_print": 100,
     "wall_clock_breakdown": true,
     "flops_profiler": {
         "enabled": false
     },
      "activation_checkpointing": {
-        "partition_activations": true,
+        "partition_activations": false,
         "cpu_checkpointing": false,
         "contiguous_memory_optimization": false,
         "number_checkpoints": null,
@@ -177,17 +177,18 @@ GPT_ARGS="--num-layers $NUM_LAYERS \
         --micro-batch-size $MICRO_BATCH_SIZE_PER_GPU \
         --tensor-model-parallel-size $TENSOR_PARALLEL \
         --pipeline-model-parallel-size $PIPELINE_PARALLEL \
-        --train-iters 5000 \
+        --
+        --train-iters 1000 \
         --lr-warmup-fraction 0.01 \
         --lr $LEARNING_RATE \
-        --min-lr 1e-5 \
-        --num-workers $SLURM_CPUS_PER_TASK \
+        --num-workers 4 \
         --tokenizer-type GPT2BPETokenizer \
         --data-path $DATA_PATH \
         --world_size $WORLD_SIZE \
+        --save $CHECKPOINT_PATH \
         --fp16"
 
-OUTPUT_ARGS="--log-interval 100 \
+OUTPUT_ARGS="--log-interval 1 \
              --save-interval 500 \
              --eval-interval 100 \
              --eval-iters 10 \
@@ -200,8 +201,6 @@ DEEPSPEED_ARGS=" \
     --deepspeed \
     --deepspeed_config ${config_json} \
     --zero-stage ${ZERO_STAGE} \
-    --deepspeed-activation-checkpointing \
-    --synchronize-each-layer
     "
 
 export TORCH_LAUNCHER="python -u -m torch.distributed.launch \
@@ -222,9 +221,9 @@ export CMD=" \
 
 
 echo "START $SLURM_JOBID: $(date)"
-
-MASKS="ff000000000000,ff00000000000000,ff0000,ff000000,ff,ff00,ff00000000,ff0000000000"
-
+c=fe
+#MASKS="ff000000000000,ff00000000000000,ff0000,ff000000,ff,ff00,ff00000000,ff0000000000"
+MASKS=0x${c}000000000000,0x${c}00000000000000,0x${c}0000,0x${c}000000,0x${c},0x${c}00,0x${c}00000000,0x${c}0000000000
 srun -l --cpu-bind=mask_cpu:$MASKS python3 $CMD
 
 #Take out the last printed average samples_per second as it is logged times*amount of gpus(I think)

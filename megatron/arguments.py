@@ -466,6 +466,9 @@ def _add_training_args(parser):
     group.add_argument('--no-bias-dropout-fusion', action='store_false',
                        help='Disable bias and dropout fusion.',
                        dest='bias_dropout_fusion')
+    group.add_argument('--no-layer-norm-fusion', action='store_true',
+                       help='Disable fused layer norm.',
+                       dest='layer_norm_fusion')                    
     group.add_argument('--disable-moe-token-dropping', action='store_false',
                        help='Disable MoE expert token dropping.',
                        dest='moe_token_dropping')

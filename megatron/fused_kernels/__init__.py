@@ -26,7 +26,7 @@ from torch.utils import cpp_extension
 # to avoid recompilation and assign arch flags explicity in
 # extra_cuda_cflags below
 os.environ["TORCH_CUDA_ARCH_LIST"] = ""
-os.environ['PYTORCH_ROCM_ARCH']=""
+os.environ['PYTORCH_ROCM_ARCH']="gfx90a"
 
 def load(args):
 
@@ -47,7 +47,7 @@ def load(args):
     # Helper function to build the kernels.
     def _cpp_extention_load_helper(name, sources, extra_cuda_flags, extra_include_paths):
         if torch.version.hip is not None:
-            extra_cuda_cflags=['-O3'] + extra_cuda_flags + cc_flag
+            extra_cuda_cflags=['-O3','-ffast-math'] + extra_cuda_flags + cc_flag
         else:
             extra_cuda_cflags=['-O3',
                                '-gencode', 'arch=compute_70,code=sm_70',
@@ -57,7 +57,8 @@ def load(args):
             name=name,
             sources=sources,
             build_directory=buildpath,
-            extra_cflags=['-O3',],
+            #extra_cflags = ['-std=c++14', '-D__HIP_ROCclr__', '-D__HIP_ARCH_GFX90A__=1','--offload-arch=gfx90a', '-x hip', '-fopenmp'],
+            extra_cflags=['-O3'],
             extra_cuda_cflags=extra_cuda_cflags,
             extra_include_paths=extra_include_paths,
             verbose=(args.rank == 0)
@@ -79,7 +80,7 @@ def load(args):
         else:
              extra_cuda_flags = ['-U__CUDA_NO_HALF_OPERATORS__',
                                 '-U__CUDA_NO_HALF_CONVERSIONS__',
-                                '--expt-relaxed-constexpr',
+                                '--expt-relaxed-constexpr',#Not supported in hip
                                 '--expt-extended-lambda']
         
         # Upper triangular softmax.
@@ -102,7 +103,8 @@ def load(args):
     if torch.version.hip is not None:
         extra_cuda_flags = []
     else:
-        extra_cuda_flags = ['-maxrregcount=50']
+        extra_cuda_flags = ['-maxrregcount=50'] # Unlike nvcc, HIP_CLANG does not support the “–maxrregcount” option
+                                                # Instead, users are encouraged to use the hip_launch_bounds
 
     sources=[srcpath / 'layer_norm_cuda.cpp',
              srcpath / 'layer_norm_cuda_kernel.cu']

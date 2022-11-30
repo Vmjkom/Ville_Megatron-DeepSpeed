@@ -23,7 +23,7 @@ LAYER_CONCAT_DIM = {
 }
 
 class DeepSpeedCheckpoint(object):
-    def __init__(self, dir, tp_degree=None, pp_degree=None, no_pp=False):
+    def __init__(self, dir, tp_degree=None, pp_degree=None, no_pp=None):
         self.dir = dir
         self.no_pp = no_pp
         self.file_list = self._get_files(dir)
@@ -32,12 +32,11 @@ class DeepSpeedCheckpoint(object):
         self.mp_rank_files = self._get_files_with_prefix(self.file_list, MP_RANK_FILE_PREFIX)
         self.layer_keys = self._get_layer_keys()
         self.layer_count = len(self.layer_keys)
-        if not self.no_pp:
-            self.original_tp_degree = len(self._get_files_with_prefix(self.layer_files, f'{LAYER_FILE_PREFIX}01'))
-            self.original_pp_degree = len(self.mp_rank_files) // self.original_tp_degree
-        else:
-            self.original_tp_degree = len(self.mp_rank_files)
-            self.original_pp_degree = 1
+        self.original_tp_degree = len(self._get_files_with_prefix(self.layer_files, f'{LAYER_FILE_PREFIX}01'))
+        print("original_tp_degree",self.original_tp_degree)
+        self.original_pp_degree = len(self.mp_rank_files) // self.original_tp_degree
+        print("original_pp_degree",self.original_pp_degree)
+        self.original_pp_degree = 1
         self.dp_degree = len(self.zero_files) // (self.original_pp_degree * self.original_tp_degree)
         self.tp_degree = self.original_tp_degree if tp_degree is None else tp_degree
         self.pp_degree = self.original_pp_degree if pp_degree is None else pp_degree
@@ -46,9 +45,8 @@ class DeepSpeedCheckpoint(object):
         self._sanity_check()
         self.pp_to_transformer_map = self._build_pp_transformer_map()
         self.transformer_file_map = self._build_transformer_file_map()
-        if not self.no_pp:
-            self.tp_to_embedding_map = self._build_tp_other_layer_map(EMBEDDING_LAYER_INDEX)
-            self.tp_to_final_norm_map = self._build_tp_other_layer_map(FINAL_LAYER_NORM_INDEX)
+        self.tp_to_embedding_map = self._build_tp_other_layer_map(EMBEDDING_LAYER_INDEX)
+        self.tp_to_final_norm_map = self._build_tp_other_layer_map(FINAL_LAYER_NORM_INDEX)
         self._build_global_state()
 
 
@@ -145,9 +143,8 @@ class DeepSpeedCheckpoint(object):
     def _sanity_check(self):
         assert len(self.mp_rank_files) % self.tp_degree == 0
         assert len(self.zero_files) % (self.pp_degree * self.tp_degree) == 0
-        if not self.no_pp:
-            assert len(self.layer_keys) > 2
-            assert (len(self.layer_keys) - 2) % self.pp_degree == 0
+        assert len(self.layer_keys) > 2
+        assert (len(self.layer_keys) - 2) % self.pp_degree == 0
      
     def _get_files_with_prefix(self, all_files, prefix):
         file_list = []
