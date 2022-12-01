@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=BertXL_32gpu_bigrun
+#SBATCH --job-name=BertXL_8gpu_test_lr1e_4_torchrun
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=100G
 #SBATCH --partition=pilot
-#SBATCH -t 2-00:00:00
-#SBATCH --nodes=4
+#SBATCH -t 00:30:00
+#SBATCH --nodes=1
 #SBATCH --gpus-per-node=8
-#SBATCH --ntasks-per-node=8
+#SBATCH --ntasks-per-node=1
 #SBATCH --distribution=block:block
 #SBATCH --account=project_462000119
 #SBATCH --threads-per-core=2
@@ -45,8 +45,8 @@ export MPICH_GPU_SUPPORT_ENABLED=1
 #OMP_THREADS/CPU
 #OMP_DISPLAY_AFFINITY=true
 #export OMP_PLACES=cores
-#export OMP_PROC_BIND=close
-export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export OMP_PROC_BIND=close
+export OMP_NUM_THREADS=2
 export SLURM_CPU_BIND=verbose
 
 #CUDA/rocr
@@ -104,7 +104,7 @@ init_std=0.013
 # init_std=0.011
 
 export WORLD_SIZE=$((SLURM_GPUS_ON_NODE*SLURM_NNODES))
-export BATCH_SIZE_PER_GPU=64
+export BATCH_SIZE_PER_GPU=30
 export GLOBAL_BATCH_SIZE=$((WORLD_SIZE*BATCH_SIZE_PER_GPU))
 
 export TENSORBOARD_DIR="logs/tb_logs/$TYPE/$model_size/ngpus_${WORLD_SIZE}/$SLURM_JOB_NAME"
@@ -114,9 +114,11 @@ export TENSORBOARD_DIR="logs/tb_logs/$TYPE/$model_size/ngpus_${WORLD_SIZE}/$SLUR
 CHECKPOINT_PATH=checkpoints/$TYPE/$model_size/$SLURM_JOB_NAME
 #rm -rf $CHECKPOINT_PATH
 VOCAB_FILE=/scratch/project_462000119/ville/Ville_Megatron-DeepSpeed/bert/finbert_vocab.txt
-DATA_PATH=/scratch/project_462000119/ville/Ville_Megatron-DeepSpeed/data/bert/finbert_data/finbert_train
+DATA_PATH=/flash/project_462000119/finbert_ville/finbert_train
 
-BERT_ARGS="--adam-beta1 0.9 \
+BERT_ARGS=" \
+            --override-lr-scheduler \
+            --adam-beta1 0.9 \
             --adam-beta2 0.999 \
             --num-layers $num_layers \
             --tensor-model-parallel-size 1 \
@@ -133,7 +135,6 @@ BERT_ARGS="--adam-beta1 0.9 \
             --lr 1e-4 \
             --min-lr 1e-5 \
             --weight-decay 1e-2 \
-            --checkpoint-activations \
             --lr-decay-style linear \
             --train-iters 1000000 \
             --vocab-file $VOCAB_FILE \
@@ -145,11 +146,11 @@ BERT_ARGS="--adam-beta1 0.9 \
             --lr-warmup-fraction .01 \
             --fp16 \
             --world_size $WORLD_SIZE \
-            --save $CHECKPOINT_PATH \
-          "
-#TODO Layer norm epsilon change
+            --save $CHECKPOINT_PATH "
+
+
 OUTPUT_ARGS="--log-interval 1 \
-             --save-interval 10000 \
+             --save-interval 1000 \
              --eval-interval 1000 \
              --eval-iters 10 \
              --tensorboard-dir $TENSORBOARD_DIR \
@@ -158,7 +159,7 @@ OUTPUT_ARGS="--log-interval 1 \
              "
 
 
-ZERO_STAGE=0
+ZERO_STAGE=2
 
 config_json="ds_configs/./ds_config.$SLURM_JOBID.json"
 
@@ -172,12 +173,7 @@ cat <<EOF > "$config_json"
         "elastic_checkpoint": true
     },
     "fp16": {
-        "enabled": true,
-        "loss_scale": 0,
-        "loss_scale_window": 500,
-        "hysteresis": 2,
-        "min_loss_scale": 1,
-        "initial_scale_power": 11
+        "enabled": true
     },
     "steps_per_print": 100,
     "wall_clock_breakdown": true,
@@ -204,10 +200,13 @@ DEEPSPEED_ARGS=" \
 export LOGLEVEL=INFO
 #export TORCH_CPP_LOG_LEVEL=INFO
 
-export TORCH_LAUNCHER="python -m torch.distributed.run \
+export TORCH_LAUNCHER="torchrun \
     --nproc_per_node $SLURM_GPUS_ON_NODE \
     --nnodes $SLURM_NNODES \
+    --master_addr $MASTER_ADDR \
+    --master_port $MASTER_PORT \
     --rdzv_backend=c10d \
+    --node_rank $SLURM_PROCID \
     "
 
 export DS_LAUNCHER="deepspeed --num_nodes $SLURM_NNODES --num_gpus $WORLD_SIZE" # Does not work with lumi
