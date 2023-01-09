@@ -1,17 +1,17 @@
 #!/bin/bash
-#SBATCH --job-name=BertXL_8gpu_test_lr1e_4_torchrun
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=100G
-#SBATCH --partition=pilot
-#SBATCH -t 00:30:00
-#SBATCH --nodes=1
+#SBATCH --job-name=Bert1_3b_80gpu_bigrun
+##SBATCH --cpus-per-task=6
+#SBATCH --mem=0G
+#SBATCH --partition=standard-g
+#SBATCH -t 2-00:00:00
+#SBATCH --nodes=10
 #SBATCH --gpus-per-node=8
-#SBATCH --ntasks-per-node=1
+#SBATCH --ntasks-per-node=8
 #SBATCH --distribution=block:block
 #SBATCH --account=project_462000119
-#SBATCH --threads-per-core=2
-#SBATCH -o logs/bert-%x-%j.out
-#SBATCH -e logs/bert-%x-%j.err
+#SBATCH --threads-per-core=1
+#SBATCH -o logs/%x-%j.out
+#SBATCH -e logs/%x-%j.err
 
 set -euo pipefail
 
@@ -19,14 +19,17 @@ unset samples
 unset flops
 
 rm -f logs/latest.out logs/latest.err
-ln -s bert-$SLURM_JOB_NAME-$SLURM_JOB_ID.out logs/latest.out
-ln -s bert-$SLURM_JOB_NAME-$SLURM_JOB_ID.err logs/latest.err
+ln -s $SLURM_JOB_NAME-$SLURM_JOB_ID.out logs/latest.out
+ln -s $SLURM_JOB_NAME-$SLURM_JOB_ID.err logs/latest.err
 
 
 module purge
-module load cray-python
 module load PrgEnv-amd
+module load cray-python
 module load cray-mpich
+#module load libfabric #Bugged, causes a hang
+#module use /pfs/lustrep2/projappl/project_462000125/samantao-public/mymodules 
+#module load aws-ofi-rccl/sam-default.lua
 module load craype-x86-trento
 module load craype-accel-amd-gfx90a
 
@@ -39,23 +42,28 @@ export NCCL_SOCKET_IFNAME=hsn0,hsn1,hsn2,hsn3
 
 
 #BINDING/OPTIMIZATION AFFINITY
-export MPICH_OFI_NIC_POLICY=GPU
-export MPICH_GPU_SUPPORT_ENABLED=1 
+#export MPICH_OFI_NIC_POLICY=GPU #Not sure mpich variables are needed with nccl/rccl
+#export MPICH_GPU_SUPPORT_ENABLED=1 
+#NCCL_SHM_DISABLE=1
+#NCCL_NSOCKS_PERTHREAD=4
+#NCCL_IGNORE_CPU_AFFINITY=1
 
 #OMP_THREADS/CPU
-#OMP_DISPLAY_AFFINITY=true
-#export OMP_PLACES=cores
-export OMP_PROC_BIND=close
-export OMP_NUM_THREADS=2
+#export OMP_DISPLAY_AFFINITY=true
+#export OMP_PLACES=cores #Lumi cpus have 2 hardware threads
+#export OMP_PROC_BIND=close #Improves cache locality
+#export OMP_NUM_THREADS=1 #Equal to amount of hardware threads in  cpu
 export SLURM_CPU_BIND=verbose
+#export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK
 
 #CUDA/rocr
 #export CUDA_DEVICE_ORDER=PCI_BUS_ID
 #export CUDA_LAUNCH_BLOCKING=1
-unset ROCR_VISIBLE_DEVICES
+#unset ROCR_VISIBLE_DEVICES
 
 #Uncomment for debugging
 #export NCCL_DEBUG=INFO
+#NCCL_DEBUG_SUBSYS=INIT,GRAPH,ENV
 #export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
 
@@ -69,7 +77,6 @@ echo "START $SLURM_JOBID: $DATE"
 
 export TYPE='bert'
 export TORCH_EXTENSIONS_DIR=/tmp/$USER/torch_extensions/
-#rm -rf $TORCH_EXTENSIONS_DIR
 #TP_SIZE=1
 #PP_SIZE=1
 
@@ -104,22 +111,22 @@ init_std=0.013
 # init_std=0.011
 
 export WORLD_SIZE=$((SLURM_GPUS_ON_NODE*SLURM_NNODES))
-export BATCH_SIZE_PER_GPU=30
+export BATCH_SIZE_PER_GPU=20
 export GLOBAL_BATCH_SIZE=$((WORLD_SIZE*BATCH_SIZE_PER_GPU))
 
-export TENSORBOARD_DIR="logs/tb_logs/$TYPE/$model_size/ngpus_${WORLD_SIZE}/$SLURM_JOB_NAME"
+export TENSORBOARD_DIR="logs/tb_logs/$TYPE/$model_size/ngpus_${WORLD_SIZE}/$SLURM_JOB_NAME-$SLURM_JOBID"
 
 
 
 CHECKPOINT_PATH=checkpoints/$TYPE/$model_size/$SLURM_JOB_NAME
 #rm -rf $CHECKPOINT_PATH
 VOCAB_FILE=/scratch/project_462000119/ville/Ville_Megatron-DeepSpeed/bert/finbert_vocab.txt
-DATA_PATH=/flash/project_462000119/finbert_ville/finbert_train
+DATA_PATH=/pfs/lustrep4/scratch/project_462000119/ville/Finbert_data/combined/converted/old_tokenizer/single_file_non_weighted/finbert_data
 
 BERT_ARGS=" \
-            --override-lr-scheduler \
             --adam-beta1 0.9 \
             --adam-beta2 0.999 \
+            --layernorm-epsilon 1e-12 \
             --num-layers $num_layers \
             --tensor-model-parallel-size 1 \
             --pipeline-model-parallel-size 1 \
@@ -128,29 +135,28 @@ BERT_ARGS=" \
             --init-method-std ${init_std} \
             --num-attention-heads $num_attn_heads \
             --seq-length 512 \
-            --split 949,50,1 \
-            --max-position-embeddings 512\
+            --split 95,4,1 \
+            --max-position-embeddings 512 \
             --micro-batch-size $BATCH_SIZE_PER_GPU \
             --global-batch-size $GLOBAL_BATCH_SIZE \
             --lr 1e-4 \
-            --min-lr 1e-5 \
             --weight-decay 1e-2 \
             --lr-decay-style linear \
             --train-iters 1000000 \
+            --lr-warmup-iters 10000 \
             --vocab-file $VOCAB_FILE \
             --tokenizer-type BertWordPieceCase \
             --data-impl mmap \
             --num-workers 4 \
             --data-path $DATA_PATH \
             --DDP-impl torch \
-            --lr-warmup-fraction .01 \
             --fp16 \
             --world_size $WORLD_SIZE \
-            --save $CHECKPOINT_PATH "
+            "
 
 
-OUTPUT_ARGS="--log-interval 1 \
-             --save-interval 1000 \
+OUTPUT_ARGS="--log-interval 10 \
+             --save-interval 10000 \
              --eval-interval 1000 \
              --eval-iters 10 \
              --tensorboard-dir $TENSORBOARD_DIR \
@@ -159,7 +165,7 @@ OUTPUT_ARGS="--log-interval 1 \
              "
 
 
-ZERO_STAGE=2
+ZERO_STAGE=0
 
 config_json="ds_configs/./ds_config.$SLURM_JOBID.json"
 
@@ -175,7 +181,7 @@ cat <<EOF > "$config_json"
     "fp16": {
         "enabled": true
     },
-    "steps_per_print": 100,
+    "steps_per_print": 10000,
     "wall_clock_breakdown": true,
     "flops_profiler": {
         "enabled": false
@@ -218,12 +224,27 @@ export CMD=" \
     $DEEPSPEED_ARGS \
     "
 
+
+MONITOR_PID=""
+if [ $SLURM_LOCALID -eq 0 ]; then
+    ./slurm_scripts/rocm-monitor.sh &
+    MONITOR_PID=$!
+fi
+
+
+#MASKS if --threads-per-core=1, MASKS2 if --threads-per-core=2
 c=fe
 MASKS=0x${c}000000000000,0x${c}00000000000000,0x${c}0000,0x${c}000000,0x${c},0x${c}00,0x${c}00000000,0x${c}0000000000
-#MASKS="ff000000000000,ff00000000000000,ff0000,ff000000,ff,ff00,ff00000000,ff0000000000"
+MASKS2=0x${c}00000000000000${c}000000000000,0x${c}00000000000000${c}00000000000000,0x${c}00000000000000${c}0000,0x${c}00000000000000${c}000000,0x${c}00000000000000${c},0x${c}00000000000000${c}00,0x${c}00000000000000${c}00000000,0x${c}00000000000000${c}0000000000
 
+#srun -l --cpu-bind=mask_cpu:0x00000000000000FE,0x000000000000FF00,0x0000000000FF0000,0x00000000FF000000,0x000000FF00000000,0x0000FF0000000000,0x00FF000000000000,0xFF00000000000000 python3 $CMD
+#srun -l --cpu-bind=mask_cpu:$MASKS python3 $CMD
+#srun -l --cpu-bind=map_cpu:48,56,16,24,2,8,32,40 python3 $CMD
+#srun -l --cpu-bind=map_cpu:48-55,56-63,16-23,24-31,2-7,8-15,32-39,40-47 python3 $CMD
+#srun -l --cpu-bind=cores python3 $CMD
+srun -l python3 $CMD
 
-srun -l --cpu-bind=mask_cpu:$MASKS python3 $CMD
+set | grep NCCL | while read line; do echo "# $line"; done
 
 #Take out the last printed average samples_per second as it is logged times*amount of gpus(I think)
 samples=$(grep "Average samples per second" logs/latest.out | tail -n 1 | grep -o "[0-9]*\.[0-9].")
@@ -233,3 +254,7 @@ flops=$(grep "Average tflops per second" logs/latest.out | tail -n 1 | grep -o "
 echo $flops $SLURM_NNODES >> samples.txt
 
 echo "END $SLURM_JOBID: $(date)"
+
+if [ ! -z $MONITOR_PID ]; then
+    kill $MONITOR_PID
+fi

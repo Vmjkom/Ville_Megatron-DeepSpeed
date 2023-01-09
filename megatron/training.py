@@ -860,7 +860,8 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
                                   elapsed_time_per_iteration, args.consumed_train_samples)
                 writer.add_scalar('iteration-time/iteration-time vs tokens',
                                   elapsed_time_per_iteration, args.consumed_train_tokens)
-                writer.add_scalar('flops/y=flops,x=steps',iteration,tflops)
+                writer.add_scalar('troughput/flops per iteration',tflops,iteration)
+                writer.add_scalar('troughput/samples/s per iteration',samples_per_sec,iteration)
         log_string = ' iteration {:8d}/{:8d} |'.format(
             iteration, args.train_iters)
         log_string += ' consumed samples: {:12d} |'.format(
@@ -945,18 +946,17 @@ def train(forward_step_func, model, optimizer, lr_scheduler,
     print_datetime('before the start of training step')
     report_memory_flag = True
     with torch.profiler.profile(
-        activities=[torch.profiler.ProfilerActivity.CPU],
         schedule=torch.profiler.schedule(
-        wait=1000, # during this phase profiler is not active
-        warmup=10, # during this phase profiler starts tracing, but the results are discarded
+        wait=10, # during this phase profiler is not active
+        warmup=5, # during this phase profiler starts tracing, but the results are discarded
         active=2, # during this phase profiler traces and records data
         repeat=1), # specifies an upper bound on the number of cycles)
             on_trace_ready=tensorboard_trace_handler(
             f'{str(os.environ["TENSORBOARD_DIR"])}/profiler',
             worker_name=f"{args.rank}_{args.local_rank}"),
-            profile_memory=True,
+            profile_memory=False,
             with_stack=False, # enable stack tracing, adds extra profiling overhead
-            with_flops=True
+            with_flops=False
         ) as profiler:
             while iteration < args.train_iters and (args.train_tokens is None or \
                 args.consumed_train_tokens < args.train_tokens):

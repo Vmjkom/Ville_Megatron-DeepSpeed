@@ -19,12 +19,12 @@ def parse_arguments():
 def show_input_files(ds_checkpoint):
     list_files(ds_checkpoint.file_list, 'all')
     list_files(ds_checkpoint.zero_files, 'zero')
-    list_files(ds_checkpoint.layer_files, 'layer')
+    #list_files(ds_checkpoint.layer_files, 'layer')
     list_files(ds_checkpoint.mp_rank_files, 'mp rank')
 
 def show_simple_state(ds_checkpoint):
-    print(f'layer keys = {ds_checkpoint.layer_keys}')
-    print(f'layer count = {ds_checkpoint.layer_count}')
+    #print(f'layer keys = {ds_checkpoint.layer_keys}')
+    #print(f'layer count = {ds_checkpoint.layer_count}')
 
     print(f'tp_degree_count = {ds_checkpoint.tp_degree}')
     print(f'pp_degree_count = {ds_checkpoint.pp_degree}')

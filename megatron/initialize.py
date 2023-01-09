@@ -84,7 +84,8 @@ def initialize_megatron(extra_args_provider=None, args_defaults={},
 
         # Compile dependencies.
         _compile_dependencies()
-
+        if args.rank == 0:
+            print("TORCH PARALLEL INFO",torch.__config__.parallel_info())
         # No continuation function
         return None
 
@@ -183,9 +184,14 @@ def _initialize_distributed():
     args = get_args()
     device_count = torch.cuda.device_count()
     args.rank = int(os.environ['SLURM_PROCID'])
+    print("SLURM PROCID",args.rank)
     args.local_rank = int(os.environ['SLURM_LOCALID'])
+    print("SLURM LOCALID",args.local_rank)
+    args.world_size=int(os.environ['WORLD_SIZE'])
     os.environ['RANK'] = str(args.rank) #For deepspeed dist initialization
     os.environ['LOCAL_RANK'] = str(args.local_rank) #For deepspeed dist initialization
+    os.environ['WORLD_SIZE']=str(args.world_size)
+    print("SLURM_CPUS_PER_TASK",str(os.getenv('SLURM_CPUS_PER_TASK',default='None')))
     if torch.distributed.is_initialized():
 
         if args.rank == 0:

@@ -57,8 +57,7 @@ def load(args):
             name=name,
             sources=sources,
             build_directory=buildpath,
-            #extra_cflags = ['-std=c++14', '-D__HIP_ROCclr__', '-D__HIP_ARCH_GFX90A__=1','--offload-arch=gfx90a', '-x hip', '-fopenmp'],
-            extra_cflags=['-O3','fopenmp'],
+            extra_cflags=['-O3','-fopenmp'],
             extra_cuda_cflags=extra_cuda_cflags,
             extra_include_paths=extra_include_paths,
             verbose=(args.rank == 0)
