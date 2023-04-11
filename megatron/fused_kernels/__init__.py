@@ -57,7 +57,7 @@ def load(args):
             name=name,
             sources=sources,
             build_directory=buildpath,
-            extra_cflags=['-O3','-fopenmp'],
+            extra_cflags=['-O3'],
             extra_cuda_cflags=extra_cuda_cflags,
             extra_include_paths=extra_include_paths,
             verbose=(args.rank == 0)

@@ -68,6 +68,7 @@ def parse_args(extra_args_provider=None, defaults={},
     args.local_rank = int(os.environ['SLURM_LOCALID'])
     #args.rank - gpus_per_node * (args.rank // gpus_per_node)
     # Tensor model parallel size.
+    args.world_size = int(os.environ['WORLD_SIZE'])
     args.tensor_model_parallel_size = min(
         args.tensor_model_parallel_size, args.world_size)
     assert args.world_size % args.tensor_model_parallel_size == 0, 'world size'\

@@ -1,19 +1,18 @@
 #!/bin/bash
 #SBATCH --job-name=gpt_pretrain_8gpu
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=1
 #SBATCH --mem=100G
-#SBATCH --partition=pilot
+#SBATCH --partition=dev-g
 #SBATCH -t 00:30:00
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=8
 #SBATCH --ntasks-per-node=8
 #SBATCH --distribution=block:block
-#SBATCH --account=project_462000119
+#SBATCH --account=project_462000185
+#SBATCH --exclusive
 #SBATCH --threads-per-core=2
 #SBATCH -o logs/gpt-%j.out
 #SBATCH -e logs/gpt-%j.err
-#SBATCH --exclude=nid005005
-
 
 set -euo pipefail
 
@@ -106,7 +105,8 @@ export MICRO_BATCH_SIZE_PER_GPU=15
 # Data
 VOCAB_FILE=gpt2/gpt2-vocab.json
 MERGE_FILE=gpt2/gpt2-merges.txt
-DATA_PATH=data/gpt2/bookcorpus/BookCorpusDataset_text_document
+BOOKS=data/gpt2/bookcorpus/BookCorpusDataset_text_document
+PILE=data/gpt2/pile/pile_text_document
 
 # Training
 LEARNING_RATE=1e-4
@@ -177,13 +177,12 @@ GPT_ARGS="--num-layers $NUM_LAYERS \
         --micro-batch-size $MICRO_BATCH_SIZE_PER_GPU \
         --tensor-model-parallel-size $TENSOR_PARALLEL \
         --pipeline-model-parallel-size $PIPELINE_PARALLEL \
-        --
         --train-iters 1000 \
         --lr-warmup-fraction 0.01 \
         --lr $LEARNING_RATE \
         --num-workers 4 \
         --tokenizer-type GPT2BPETokenizer \
-        --data-path $DATA_PATH \
+        --data-path 0.2 $PILE 0.8 $BOOKS \
         --world_size $WORLD_SIZE \
         --save $CHECKPOINT_PATH \
         --fp16"
@@ -224,7 +223,7 @@ echo "START $SLURM_JOBID: $(date)"
 c=fe
 #MASKS="ff000000000000,ff00000000000000,ff0000,ff000000,ff,ff00,ff00000000,ff0000000000"
 MASKS=0x${c}000000000000,0x${c}00000000000000,0x${c}0000,0x${c}000000,0x${c},0x${c}00,0x${c}00000000,0x${c}0000000000
-srun -l --cpu-bind=mask_cpu:$MASKS python3 $CMD
+srun -l python3 $CMD
 
 #Take out the last printed average samples_per second as it is logged times*amount of gpus(I think)
 samples=$(grep "Average samples per second" logs/latest.out | tail -n 1 | grep -o "[0-9]*\.[0-9].")

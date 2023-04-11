@@ -327,7 +327,6 @@ def get_model(model_provider_func):
 
     if args.DDP_impl == 'torch':
         i = torch.cuda.current_device()
-        print("CURRENT DEVICE",i)
         model = [torchDDP(model_module, device_ids=[i], output_device=i,
                           process_group=mpu.get_data_parallel_group())
                  for model_module in model]
@@ -947,7 +946,7 @@ def train(forward_step_func, model, optimizer, lr_scheduler,
     report_memory_flag = True
     with torch.profiler.profile(
         schedule=torch.profiler.schedule(
-        wait=10, # during this phase profiler is not active
+        wait=100, # during this phase profiler is not active
         warmup=5, # during this phase profiler starts tracing, but the results are discarded
         active=2, # during this phase profiler traces and records data
         repeat=1), # specifies an upper bound on the number of cycles)
@@ -955,8 +954,8 @@ def train(forward_step_func, model, optimizer, lr_scheduler,
             f'{str(os.environ["TENSORBOARD_DIR"])}/profiler',
             worker_name=f"{args.rank}_{args.local_rank}"),
             profile_memory=False,
-            with_stack=False, # enable stack tracing, adds extra profiling overhead
-            with_flops=False
+            with_stack=True, # enable stack tracing, adds extra profiling overhead
+            with_flops=True
         ) as profiler:
             while iteration < args.train_iters and (args.train_tokens is None or \
                 args.consumed_train_tokens < args.train_tokens):
