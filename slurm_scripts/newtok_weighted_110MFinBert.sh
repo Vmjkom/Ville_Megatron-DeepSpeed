@@ -1,16 +1,15 @@
 #!/bin/bash
-#SBATCH --job-name=FinBert_3.9B_test
+#SBATCH --job-name=Weighted_FinBert_110M_160gpus_newtok_bigrun
 #SBATCH --cpus-per-task=7
-#SBATCH --mem=0G
-#SBATCH --partition=dev-g
-#SBATCH -t 00:30:00
-#SBATCH --nodes=4
+#SBATCH --mem=0
+#SBATCH --partition=standard-g
+#SBATCH -t 2-00:00:00
+#SBATCH --nodes=20
 #SBATCH --gpus-per-node=8
 #SBATCH --ntasks-per-node=8
 #SBATCH --distribution=block:cyclic
 #SBATCH --account=project_462000119
 #SBATCH --threads-per-core=1
-#SBATCH --exclusive
 #SBATCH -o logs/%x-%j.out
 #SBATCH -e logs/%x-%j.err
 
@@ -27,52 +26,46 @@ ln -s $SLURM_JOB_NAME-$SLURM_JOB_ID.err logs/latest.err
 module purge
 module load LUMI/22.08 partition/G
 #module load aws-ofi-rccl
-#module load rocm/5.2.5
+module load rocm
 module load cray-python
-
-
 source .venv/bin/activate
-#PYTHONPATH=$SCRATCH/ville/megatron_repos/Ville_Megatron-DeepSpeed/.venv/lib/python3.9/site-packages/
 
 
-module list
 set | grep SLURM | while read line; do echo "# $line"; done
 
-PROFILE="True"
-
-#Use only highspeed network
+#FAULTY SOCKETS, AWS
 export NCCL_SOCKET_IFNAME=hsn
-
-
-#BINDING/OPTIMIZATION AFFINITY
-#export MPICH_OFI_NIC_POLICY=GPU #Not sure mpich variables are needed with nccl/rccl
-#export MPICH_GPU_SUPPORT_ENABLED=1 
-MPICH_OFI_VERBOSE=1
-#NCCL_SHM_DISABLE=1
-export NCCL_SOCKET_NTHREADS=16
-#NCCL_IGNORE_CPU_AFFINITY=1
 export NCCL_NET_GDR_LEVEL=3
 export CXI_FORK_SAFE=1
 export CXI_FORK_SAFE_HP=1
 export FI_CXI_DISABLE_CQ_HUGETLB=1
+
+#BINDING/OPTIMIZATION AFFINITY
+#export MPICH_OFI_NIC_POLICY=GPU #Not sure mpich variables are needed with nccl/rccl
+#export MPICH_GPU_SUPPORT_ENABLED=1 
+#NCCL_SHM_DISABLE=1
+NCCL_NSOCKS_PERTHREAD=16
+#NCCL_IGNORE_CPU_AFFINITY=1
+#export NCCL_NET_PLUGIN=aws
 
 
 #OMP_THREADS/CPU
 export OMP_DISPLAY_AFFINITY=true
 #export OMP_PLACES=cores #Lumi cpus have 2 hardware threads
 #export OMP_PROC_BIND=close #Improves cache locality
-export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK #Equal to amount of hardware threads in  cpu
-export SLURM_CPU_BIND=verbose
+#export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK #Equal to amount of hardware threads in  cpu
+#export SLURM_CPU_BIND=verbose
 #export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK
 
 #CUDA/rocr
 #export CUDA_DEVICE_ORDER=PCI_BUS_ID
 #export CUDA_LAUNCH_BLOCKING=1
 #unset ROCR_VISIBLE_DEVICES
+
 #Uncomment for debugging
-export NCCL_DEBUG=INFO
-NCCL_DEBUG_SUBSYS=INIT,GRAPH,ENV
-export TORCH_DISTRIBUTED_DEBUG=DETAIL
+#export NCCL_DEBUG=INFO
+#NCCL_DEBUG_SUBSYS=INIT,GRAPH,ENV
+#export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
 
 #Distributed args
@@ -85,17 +78,17 @@ echo "START $SLURM_JOBID: $DATE"
 
 export TYPE='bert'
 export TORCH_EXTENSIONS_DIR=/tmp/$USER/torch_extensions/
-TP_SIZE=2
+TP_SIZE=1
 PP_SIZE=1
 
 #model_config
 #BERT 110M (same config as original BERT-Base model)
 ## This config is not included in Megatron-LM paper
-#model_size=110M
-#num_layers=12
-#hidden_size=768
-#num_attn_heads=12
-#init_std=0.02
+model_size=110M
+num_layers=12
+hidden_size=768
+num_attn_heads=12
+init_std=0.02
 
 ## BERT 345M (same config as original BERT-Large model)
 #model_size=345M
@@ -108,35 +101,28 @@ PP_SIZE=1
 #model_size=1.3B
 #num_layers=24
 #hidden_size=2048
-#um_attn_heads=32
-#nit_std=0.013
+#num_attn_heads=32
+#init_std=0.013
 
 ## BERT 3.9B
-model_size=3.9B
-num_layers=48
-hidden_size=2560
-num_attn_heads=40
-init_std=0.011
+#model_size=3.9
+#num_layers=48
+#hidden_size=2560
+#num_attn_heads=40
+#init_std=0.011
 
 export WORLD_SIZE=$((SLURM_GPUS_ON_NODE*SLURM_NNODES))
-export BATCH_SIZE_PER_GPU=10
+export BATCH_SIZE_PER_GPU=120
 export GLOBAL_BATCH_SIZE=$((WORLD_SIZE*BATCH_SIZE_PER_GPU))
 
-export TENSORBOARD_DIR="logs/tb_logs/$TYPE/tests/misc/$model_size/ngpus_${WORLD_SIZE}/$SLURM_JOB_NAME"
+export TENSORBOARD_DIR="logs/tb_logs/$TYPE/pretrain/$model_size/ngpus_${WORLD_SIZE}/$SLURM_JOB_NAME"
 
 
 
 CHECKPOINT_PATH=checkpoints/$TYPE/$model_size/$SLURM_JOB_NAME
 #rm -rf $CHECKPOINT_PATH
-VOCAB_FILE=/pfs/lustrep2/scratch/project_462000185/ville/megatron_repos/Ville_Megatron-DeepSpeed/bert/finbert_vocab.txt
-DATA_PATH=/scratch/project_462000185/ville/data/Finbert_data/combined/converted/old_tokenizer/single_file_non_weighted/finbert_data
-
-YLE=/scratch/project_462000185/ville/data/Finbert_data/combined/converted/old_tokenizer/seperated/ylenews_text_sentence
-STT=/scratch/project_462000185/ville/data/Finbert_data/combined/converted/old_tokenizer/seperated/sttnews_text_sentence
-SUOMI24=/scratch/project_462000185/ville/data/Finbert_data/combined/converted/old_tokenizer/seperated/suomi24_text_sentence
-CRAWL=/scratch/project_462000185/ville/data/Finbert_data/combined/converted/old_tokenizer/seperated/delivery_text_sentence
-DATASET="8.0 ${YLE} 0.0 ${SUOMI24} 2.0 ${STT} 1.0 ${CRAWL}"
-
+VOCAB_FILE=/scratch/project_462000185/pretrained_tokenizers/pgfv2-BERT-tok-limit-train-250-52k/vocab.txt
+DATA_PATH=/scratch/project_462000185/ville/data/Finbert_data/combined/converted/old_tokenizer/single_weighted/balanced_finbert_data_text_sentence
 
 BERT_ARGS=" \
             --adam-beta1 0.9 \
@@ -157,7 +143,8 @@ BERT_ARGS=" \
             --lr 1e-4 \
             --weight-decay 1e-2 \
             --lr-decay-style linear \
-            --train-iters 500 \
+            --train-iters 1000000 \
+            --lr-warmup-iters 10000 \
             --vocab-file $VOCAB_FILE \
             --tokenizer-type BertWordPieceCase \
             --data-impl mmap \
@@ -166,9 +153,12 @@ BERT_ARGS=" \
             --DDP-impl torch \
             --fp16 \
             --world_size $WORLD_SIZE \
+            --save $CHECKPOINT_PATH \
+            --load $CHECKPOINT_PATH \
             "
 
-OUTPUT_ARGS="--log-interval 5 \
+
+OUTPUT_ARGS="--log-interval 1 \
              --save-interval 10000 \
              --eval-interval 1000 \
              --eval-iters 10 \
@@ -194,7 +184,7 @@ cat <<EOF > "$config_json"
     "fp16": {
         "enabled": true
     },
-    "steps_per_print": 10,
+    "steps_per_print": 1000,
     "wall_clock_breakdown": true,
     "flops_profiler": {
         "enabled": false
@@ -239,17 +229,9 @@ export CMD=" \
 
 
 
-
 #MASKS if --threads-per-core=1, MASKS2 if --threads-per-core=2
-c=fe
-MASKS=0x${c}000000000000,0x${c}00000000000000,0x${c}0000,0x${c}000000,0x${c},0x${c}00,0x${c}00000000,0x${c}0000000000
-MASKS2=0x${c}00000000000000${c}000000000000,0x${c}00000000000000${c}00000000000000,0x${c}00000000000000${c}0000,0x${c}00000000000000${c}000000,0x${c}00000000000000${c},0x${c}00000000000000${c}00,0x${c}00000000000000${c}00000000,0x${c}00000000000000${c}0000000000
 MASKS3=0x00FE000000000000,0xFE00000000000000,0x0000000000FE0000,0x00000000FE000000,0x00000000000000FE,0x000000000000FE00,0x000000FE00000000,0x0000FE0000000000
-#srun -l --cpu-bind=mask_cpu:0x00000000000000FE,0x000000000000FF00,0x0000000000FF0000,0x00000000FF000000,0x000000FF00000000,0x0000FF0000000000,0x00FF000000000000,0xFF00000000000000 python3 $CMD
-#srun -l --cpu-bind=mask_cpu:$MASKS python3 $CMD
-#srun -l --cpu-bind=map_cpu:48,56,16,24,2,8,32,40 python3 $CMD
-#srun -l --cpu-bind=map_cpu:48-55,56-63,16-23,24-31,2-7,8-15,32-39,40-47 python3 $CMD
-#srun -l --cpu-bind=cores python3 $CMD
+
 srun -l --cpu-bind=mask_cpu:$MASKS3 python3 $CMD
 #srun -l python3 $CMD
 
