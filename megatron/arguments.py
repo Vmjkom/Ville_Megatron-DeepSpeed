@@ -894,7 +894,7 @@ def _add_activation_checkpoint_args(parser):
     group.add_argument('--partition-activations', action='store_true',
                        help='partition Activations across GPUs before checkpointing.')
     group.add_argument('--contigious-checkpointing', action='store_true',
-                       help='Contigious memory checkpointing for activatoins.')
+                       help='Contigious memory checkpointing for activations.')
     group.add_argument('--checkpoint-in-cpu', action='store_true',
                        help='Move the activation checkpoints to CPU.')
     group.add_argument('--synchronize-each-layer', action='store_true',

@@ -1,12 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=meg_gpt_8gpu
+#SBATCH --job-name=meg_gpt_4pu
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=50G
 #SBATCH --partition gputest
 #SBATCH -t 00:15:00
-#SBATCH --nodes=2
+#SBATCH --nodes=1
 #SBATCH --gpus-per-node=v100:4
-##SBATCH --gpu-bind=single:1
 #SBATCH --ntasks-per-node=4
 #SBATCH --distribution=block:block
 #SBATCH --account=project_2004600
@@ -14,19 +13,19 @@
 #SBATCH -e logs/gpt-%x.err
 
 
-set -euxo pipefail
+set -euo pipefail
 
 unset samples
 unset flops
 
 rm -f logs/latest.out logs/latest.err
-ln -s bert-$SLURM_JOB_NAME.out logs/latest.out
-ln -s bert-$SLURM_JOB_NAME.err logs/latest.err
+ln -s gpt-$SLURM_JOB_NAME.out logs/latest.out
+ln -s gpt-$SLURM_JOB_NAME.err logs/latest.err
 
 module purge
 
 module load pytorch/1.12
-
+module load openmpi
 
 set | grep SLURM | while read line; do echo "# $line"; done
 
@@ -37,37 +36,18 @@ export TORCH_EXTENSIONS_DIR=/tmp/$USER/torch_extensions/
 
 
 #OMP_THREADS/CPU
-#OMP_DISPLAY_AFFINITY=true
-#export OMP_PLACES=cores
-#export OMP_PROC_BIND=close
-#export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
+OMP_DISPLAY_AFFINITY=true
+export OMP_PLACES=cores
+export OMP_PROC_BIND=close
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export SLURM_CPU_BIND=verbose
 
 #CUDA
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 #export CUDA_LAUNCH_BLOCKING=1
-echo "CUDA DEVICES FROM SBATCH" $CUDA_VISIBLE_DEVICES
 
-#WORLD_SIZE for deepspeed/torch distributed init
-export WORLD_SIZE=$((SLURM_GPUS_ON_NODE*SLURM_NNODES))
-export GLOBAL_BATCH_SIZE=$((WORLD_SIZE*BATCH_SIZE_PER_GPU))
-
-#export BATCH_SIZE_PER_GPU=15
-#export RANK=$SLURM_PROCID
-#export LOCAL_RANK=$SLURM_LOCALID
-echo "CUDA_VISIBLE_DEVICES"=$CUDA_VISIBLE_DEVICES
-echo "WORLD_SIZE" $WORLD_SIZE
-echo "SLURM_NODEID" $SLURM_NODEID
-echo "SLURM LOCALID" $SLURM_LOCALID
-echo "SLURM PROCID" $SLURM_PROCID
-echo "SLURM_JOB_GPUS" $SLURM_JOB_GPUS
-
-
-# Model
-export TYPE='gpt2'
-SEQ_LENGTH=1024
-export TENSORBOARD_DIR="logs/$TYPE/tb_logs/ngpus_$WORLD_SIZE"
 # Model-specific args
+export TYPE='gpt2'
 
 # gpt2-small: 12 layers, hidden size 768, 12 attention heads
 # NUM_LAYERS=12
@@ -76,7 +56,9 @@ export TENSORBOARD_DIR="logs/$TYPE/tb_logs/ngpus_$WORLD_SIZE"
 # MICRO_BATCH_SIZE_PER_GPU=16
 
 # gpt2-medium: 24 layers, hidden size 1024, 16 attention heads
+
 export NUM_LAYERS=24
+export SEQ_LENGTH=1024
 export HIDDEN_SIZE=1024
 export NUM_ATTENTION_HEADS=16
 export MICRO_BATCH_SIZE_PER_GPU=8
@@ -90,15 +72,28 @@ export MICRO_BATCH_SIZE_PER_GPU=8
 # Data
 VOCAB_FILE=$TYPE/gpt2-vocab.json
 MERGE_FILE=$TYPE/gpt2-merges.txt
-DATA_PATH=data/$TYPE/tiny-owt-sample_text_sentence_text_document
+DATA_PATH=data/gpt2/bookcorpus/BookCorpusDataset_text_document
 
 # Training
-TRAIN_ITERS=100
+TRAIN_ITERS=500
 LEARNING_RATE=0.00015
 ZERO_STAGE=1
 GRADIENT_ACCUMULATION_STEPS=1
 TENSOR_PARALLEL=1
 PIPELINE_PARALLEL=1
+
+#Network
+export MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
+export MASTER_PORT=1234
+
+#WORLD_SIZE for deepspeed/torch distributed init
+export WORLD_SIZE=$((SLURM_GPUS_ON_NODE*SLURM_NNODES))
+export GLOBAL_BATCH_SIZE=$((WORLD_SIZE*MICRO_BATCH_SIZE_PER_GPU))
+
+
+
+# Model
+export TENSORBOARD_DIR="logs/$TYPE/tb_logs/ngpus_$WORLD_SIZE"
 
 mkdir -p ds_configs
 config_json="ds_configs/./ds_config.$SLURM_JOBID.json"
@@ -106,7 +101,7 @@ config_json="ds_configs/./ds_config.$SLURM_JOBID.json"
 #Autotune
 cat <<EOF > "$config_json"
 {
-    "train_micro_batch_size_per_gpu": $BATCH_SIZE_PER_GPU,
+    "train_micro_batch_size_per_gpu": $MICRO_BATCH_SIZE_PER_GPU,
     "gradient_clipping": 1.0,
     "zero_optimization": {
         "stage": $ZERO_STAGE
@@ -114,14 +109,14 @@ cat <<EOF > "$config_json"
     "fp16": {
         "enabled": true
     },
-    "steps_per_print": 50000,
+    "steps_per_print": 1,
     "wall_clock_breakdown": true,
     "flops_profiler": {
         "enabled": false
     },
     "tensorboard": {
-        "enabled": false,
-        "output_path": "logs/tb_logs/ds_logs/",
+        "enabled": true,
+        "output_path": "$TENSORBOARD_DIR/ds_logs",
         "job_name": "$SLURM_GPUS_ON_NODE"
     }
 }
@@ -145,6 +140,7 @@ GPT_ARGS="--num-layers $NUM_LAYERS \
         --tokenizer-type GPT2BPETokenizer \
         --data-path $DATA_PATH \
         --world_size $WORLD_SIZE \
+        --DDP-impl torch
         --fp16"
 
 OUTPUT_ARGS="--log-interval 10 \
@@ -160,16 +156,17 @@ DEEPSPEED_ARGS=" \
     --deepspeed \
     --deepspeed_config ${config_json} \
     --zero-stage ${ZERO_STAGE} \
+    --deepspeed-activation-checkpointing \
     "
 
 export TORCH_LAUNCHER="python -u -m torch.distributed.launch \
-    --nproc_per_node $GPUS_PER_NODE \
-    --nnodes $NNODES \
+    --nproc_per_node $SLURM_GPUS_ON_NODE \
+    --nnodes $SLURM_NNODES \
     --master_addr $MASTER_ADDR \
     --master_port $MASTER_PORT \
     "
 
-export DS_LAUNCHER="deepspeed --num_nodes $NNODES --num_gpus $WORLD_SIZE"
+export DS_LAUNCHER="deepspeed --num_nodes $SLURM_NNODES --num_gpus $WORLD_SIZE"
 
 export CMD=" \
     pretrain_gpt.py \
